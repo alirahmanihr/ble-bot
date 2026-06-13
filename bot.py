@@ -4,7 +4,7 @@ import aiohttp
 import bale_api as api
 import database as db
 from database import (INDUSTRIES, CATEGORIES, PROVINCES, EMP_TYPES, 
-                      GENDERS, EXPERIENCES, RELOCATE, shamsi_datetime, fmt_salary)
+                      GENDERS, EXPERIENCES, RELOCATE, shamsi_datetime)
 from bale_api import inline, reply_kb, remove_kb, paginate, msg_text, msg_doc, msg_uid, msg_cid, cb_uid, cb_cid, cb_mid
 from config import TOKEN, ADMIN_IDS
 
