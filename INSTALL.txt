@@ -1,0 +1,34 @@
+⚠️ اگر خطای Timeout دریافت کردید:
+
+═══════════════════════════════════════════════════════════════
+
+حل سریع:
+
+۱. اگر دانلود بندی شد، دوباره try کنید
+   (تایمآوت را از ۶۰ به ۱۰۰۰ ثانیه تغییر دادیم)
+
+۲. اگر مشکل ادامه دارد، دستی نصب کنید:
+
+   CMD یا PowerShell را باز کنید (Windows + R، سپس cmd)
+   
+   یکی یکی وارد کنید:
+   
+   pip install --default-timeout=1000 aiohttp
+   pip install --default-timeout=1000 jdatetime
+   pip install --default-timeout=1000 python-dotenv
+
+۳. سپس bot.py را اجرا کنید:
+
+   python bot.py
+
+═══════════════════════════════════════════════════════════════
+
+اگر هنوز کار نکرد:
+
+• اینترنت خود را بررسی کنید
+• VPN را امتحان کنید
+• آیینه دیگر را امتحان کنید:
+
+  pip install -i https://mirrors.aliyun.com/pypi/simple/ aiohttp jdatetime python-dotenv
+
+═══════════════════════════════════════════════════════════════
