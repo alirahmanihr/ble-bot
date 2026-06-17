@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # 📁 file: bale_api.py
 import json
 
@@ -142,7 +141,6 @@ def cb_cid(cb):
 
 def cb_mid(cb):
     return cb.get("message", {}).get("message_id")
-=======
 """بله HTTP API"""
 import asyncio, aiohttp, logging
 log = logging.getLogger(__name__)
@@ -215,4 +213,3 @@ def fmt_salary(n):
     if not n: return "توافقی"
     s = str(int(n))
     return ",".join([s[max(0,i-3):i] for i in range(len(s),0,-3)][::-1])
->>>>>>> b5b8e6b86e8330ffa1cb6ebdffd753fca440247f
