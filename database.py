@@ -251,13 +251,29 @@ async def get_job(job_id):
 async def get_jobs(category=None):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        query = """
+            SELECT j.*, u.emp_name AS employer_name, u.emp_company AS employer_company
+            FROM jobs j
+            LEFT JOIN users u ON j.emp_cid = u.chat_id
+            WHERE j.status='active' AND j.admin_approved=1
+        """
+        params = []
         if category:
-            cur = await db.execute(
-                "SELECT * FROM jobs WHERE category=? AND status='active' AND admin_approved=1",
-                (category,))
-        else:
-            cur = await db.execute(
-                "SELECT * FROM jobs WHERE status='active' AND admin_approved=1")
+            query += " AND j.category=?"
+            params.append(category)
+        cur = await db.execute(query, params)
+        return await cur.fetchall()
+
+
+async def get_all_jobs():
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("""
+            SELECT j.*, u.emp_name AS employer_name, u.emp_company AS employer_company
+            FROM jobs j
+            LEFT JOIN users u ON j.emp_cid = u.chat_id
+            ORDER BY j.created_at DESC
+        """)
         return await cur.fetchall()
 
 
@@ -338,6 +354,21 @@ async def reject_application(app_id, reason=""):
         UPDATE applications SET status='rejected', reject_reason=? WHERE app_id=?
         """, (reason, app_id))
         await db.commit()
+
+
+async def get_all_applications():
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("""
+            SELECT a.*, j.title AS job_title, j.emp_cid AS employer_id,
+                   u.emp_company AS employer_company, u2.js_name AS seeker_name
+            FROM applications a
+            JOIN jobs j ON a.job_id = j.job_id
+            LEFT JOIN users u ON j.emp_cid = u.chat_id
+            LEFT JOIN users u2 ON a.seeker_cid = u2.chat_id
+            ORDER BY a.created_at DESC
+        """)
+        return await cur.fetchall()
 
 
 async def get_seeker_applications(seeker_cid):

@@ -10,8 +10,3 @@ for p in os.getenv("ADMIN_IDS", "").split(","):
     p = p.strip()
     if p.isdigit():
         ADMIN_IDS.add(int(p))
-
-for p in os.getenv("ADMIN_IDS", "").split(","):
-    p = p.strip()
-    if p.isdigit():
-        ADMIN_IDS.add(int(p))
