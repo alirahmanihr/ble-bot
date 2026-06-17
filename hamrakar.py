@@ -65,7 +65,8 @@ def emp_menu():
         ["📝 ثبت آگهی", "📋 آگهی‌های من"],
         ["🔎 جستجوی کارجو", "📬 درخواست‌های رزومه"],
         ["👤 پروفایل", "⚙️ تنظیمات"],
-        ["🔄 تغییر نقش", "❓ راهنما"],
+        ["🔄 تغییر نقش", "🔄 شروع مجدد"],
+        ["❓ راهنما"],
     ])
 
 def js_menu():
@@ -73,13 +74,14 @@ def js_menu():
         ["🔍 جستجوی آگهی", "📄 ارسال رزومه"],
         ["📊 درخواست‌های من", "👤 پروفایل"],
         ["⚙️ تنظیمات", "🔄 تغییر نقش"],
-        ["❓ راهنما"],
+        ["🔄 شروع مجدد", "❓ راهنما"],
     ])
 
 def adm_menu():
     return reply_kb([
         ["📋 تأیید آگهی", "📬 تأیید رزومه"],
         ["📊 آمار", "🔙 منو"],
+        ["🔄 شروع مجدد"],
     ])
 
 def menu_for(user):
@@ -146,6 +148,7 @@ async def on_msg(s, msg):
         "📬 تأیید رزومه": lambda: adm_apps(s, cid),
         "📊 آمار": lambda: cmd_stats(s, cid),
         "🔙 منو": lambda: cmd_menu(s, cid),
+        "🔄 شروع مجدد": lambda: cmd_restart(s, cid, uid),
     }
     if text in menu_map:
         await menu_map[text]()
@@ -497,13 +500,15 @@ async def on_cb(s, cb):
 
 async def welcome(s, cid, uid):
     await clear(uid)
-    kb = inline([[("👔 کارفرما", "role:employer"), ("🔍 کارجو", "role:job_seeker")]])
-    await api.send_message(s, cid,
+    welcome_text = await db.get_setting("welcome_text",
         "🌟 *به رسانه استخدامی همراکار خوش آمدید*\n\n"
         "✨ ما به توان انسان‌ها باور داریم ✨\n\n"
-        "لطفا نقش خود را گزینش کنید:", kb)
+        "لطفا نقش خود را گزینش کنید:")
+    kb = inline([[("👔 کارفرما", "role:employer"), ("🔍 کارجو", "role:job_seeker")]])
+    await api.send_message(s, cid, welcome_text, kb)
 
 async def cmd_start(s, cid, uid):
+    await clear(uid)
     user = await db.get_user(cid)
     if user and user["role"]:
         await show_menu(s, cid, user)
@@ -511,6 +516,13 @@ async def cmd_start(s, cid, uid):
         text = "«اگر دوست دارید عضو کانال‌های ما شوید و ما را خوشحال کنید، می‌توانید عضو شوید. در غیر این صورت، می‌توانید از این مرحله عبور کنید.»"
         await api.send_message(s, cid, text,
             inline([[("✅ عضو شدم", "joined:ok"), ("⏭ بعداً", "skip_channel")]]))
+
+async def cmd_restart(s, cid, uid):
+    await clear(uid)
+    user = await db.get_user(cid)
+    if user and user["role"]:
+        await db.upsert_user(cid, role=None)
+    await cmd_start(s, cid, uid)
 
 async def cmd_menu(s, cid):
     user = await db.get_user(cid)

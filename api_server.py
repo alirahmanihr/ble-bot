@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 import database as db
 
 app = FastAPI(title="Hamrakar API", version="1.0.0")
@@ -73,6 +73,21 @@ async def approve_job(job_id: int):
 async def reject_job(job_id: int, reason: str = ""):
     await db.reject_job(job_id, reason)
     return {"ok": True, "job_id": job_id}
+
+
+@app.get("/settings/welcome-text")
+async def get_welcome_text():
+    text = await db.get_setting("welcome_text",
+        "🌟 *به رسانه استخدامی همراکار خوش آمدید*")
+    return {"key": "welcome_text", "value": text}
+
+
+@app.post("/settings/welcome-text")
+async def set_welcome_text(req: Request):
+    body = await req.json()
+    value = body.get("value", "")
+    await db.set_setting("welcome_text", value)
+    return {"ok": True, "key": "welcome_text", "value": value}
 
 
 @app.post("/send")

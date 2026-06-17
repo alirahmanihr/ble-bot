@@ -191,6 +191,25 @@ async def init_db():
         )
         """)
 
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+        """)
+
+        # Insert default welcome_text if not exists
+        cur = await db.execute("SELECT COUNT(*) FROM settings WHERE key='welcome_text'")
+        count = (await cur.fetchone())[0]
+        if count == 0:
+            await db.execute(
+                "INSERT INTO settings (key, value) VALUES (?, ?)",
+                ("welcome_text",
+                 "🌟 *به رسانه استخدامی همراکار خوش آمدید*\n\n"
+                 "✨ ما به توان انسان‌ها باور داریم ✨\n\n"
+                 "لطفا نقش خود را گزینش کنید:")
+            )
+
         await db.commit()
 
 
@@ -456,6 +475,24 @@ async def set_state(uid, state, data=None):
 async def clear_state(uid):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM user_state WHERE uid=?", (uid,))
+        await db.commit()
+
+
+# =========================================================
+# SETTINGS
+# =========================================================
+async def get_setting(key, default=""):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT value FROM settings WHERE key=?", (key,))
+        row = await cur.fetchone()
+        return row[0] if row else default
+
+
+async def set_setting(key, value):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            (key, value))
         await db.commit()
 
 
