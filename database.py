@@ -842,6 +842,19 @@ def save_direct_message(from_cid, to_cid, job_id, text):
         )
         c.commit(); c.close()
 
+# ══════════════════════════════════════════════════════════════════════════
+# لاگ‌های ادمین
+# ══════════════════════════════════════════════════════════════════════════
+def get_admin_logs(limit=20):
+    """دریافت لاگ‌های ادمین"""
+    with _lock:
+        c = _c()
+        rows = c.execute(
+            "SELECT * FROM admin_logs ORDER BY created_at DESC LIMIT ?",
+            (limit,)
+        ).fetchall()
+        c.close()
+    return rows
 
 # ══════════════════════════════════════════════════════════════════════════
 # ویرایش آگهی
