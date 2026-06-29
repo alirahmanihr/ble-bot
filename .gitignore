@@ -1,0 +1,5 @@
+.env
+hamrakar.db
+hamrakar.log
+__pycache__/
+*.pyc
