@@ -70,6 +70,12 @@ RES_JOB, RES_LETTER, RES_UPLOAD = "RES_JOB","RES_LETTER","RES_UPLOAD"
 ADM_REJ_JOB, ADM_REJ_APP = "ADM_REJ_JOB","ADM_REJ_APP"
 ADM_BROADCAST, ADM_BAN_ID = "ADM_BROADCAST","ADM_BAN_ID"
 
+# اضافه شده برای state های ویرایش و پیام مستقیم (قبلاً در انتها بود)
+DM_STATE = "DM_WRITE"
+EDIT_EMP_FIELD = "EDIT_EMP_FIELD"
+EDIT_JS_FIELD  = "EDIT_JS_FIELD"
+EDIT_JOB_FIELD = "EDIT_JOB_FIELD"
+
 # دکمه‌های منو (برای جلوگیری از ذخیره اشتباه)
 MENU_TEXTS = {
     "📝 ثبت آگهی","📋 آگهی‌های من","🔎 جستجوی کارجو","📬 درخواست‌های رزومه",
@@ -211,6 +217,160 @@ async def handle_cmd(s, cid, text, data):
             else:
                 await api.send_message(s, cid, "❌ یافت نشد")
 
+# ───── توابع کمکی که در handle_extended_cb و handle_extended_state استفاده می‌شوند ─────
+# (این توابع قبلاً در انتهای فایل بودند، اما برای رفع خطا به اینجا منتقل شده‌اند)
+
+async def smart_match_jobs(s, cid):
+    """نمایش آگهی‌های پیشنهادی بر اساس پروفایل"""
+    user = db.get_user(cid)
+    if not user or user["role"] != "job_seeker": return
+
+    await api.send_message(s, cid, "🤖 *در حال تطابق هوشمند...*")
+    matches = db.get_matched_jobs(cid, limit=10)
+
+    if not matches:
+        await api.send_message(s, cid,
+            "❌ آگهی‌ای متناسب با پروفایل شما یافت نشد.\n\n"
+            "💡 پروفایل خود را تکمیل کنید تا بهتر تطابق یابد.",
+            menu_for(user))
+        return
+
+    await api.send_message(s, cid, f"✅ *{len(matches)} آگهی متناسب با شما:*")
+    for score, job in matches:
+        bar = "🟢" * (score//20) + "⬜" * (5 - score//20)
+        await api.send_message(s, cid,
+            f"{bar} *تطابق: {score}%*\n\n"
+            f"💼 *{job['title']}*\n"
+            f"🏷 {job['category']}\n"
+            f"💰 {fmt_salary(job.get('salary_min'), job.get('salary_max'))}\n"
+            f"🗺 {job.get('province') or '—'}\n"
+            f"🤝 {job.get('emp_type') or '—'}",
+            inline([[
+                ("📄 ارسال رزومه", f"applyjob:{job['job_id']}"),
+                ("🔖 ذخیره", f"bookmark:{job['job_id']}"),
+            ]]))
+    await show_menu(s, cid, user)
+
+
+async def smart_match_seekers(s, cid, job_id):
+    """نمایش کارجوهای پیشنهادی برای آگهی"""
+    user = db.get_user(cid)
+    if not user or user["role"] != "employer": return
+
+    job = db.get_job(job_id)
+    if not job:
+        await api.send_message(s, cid, "❌ آگهی یافت نشد"); return
+
+    await api.send_message(s, cid, f"🤖 *جستجوی هوشمند برای آگهی {job['title']}...*")
+    matches = db.get_matched_seekers(job_id, limit=10)
+
+    if not matches:
+        await api.send_message(s, cid, "❌ کارجوی متناسبی یافت نشد")
+        return
+
+    await api.send_message(s, cid, f"✅ *{len(matches)} کارجوی متناسب:*")
+    for score, sk in matches:
+        bar  = "🟢" * (score//20) + "⬜" * (5 - score//20)
+        cats = jlist(sk.get("js_categories","[]"))
+        name = (sk.get("js_name") or "").split()[0] or "—"
+        await api.send_message(s, cid,
+            f"{bar} *تطابق: {score}%*\n\n"
+            f"👤 {name}\n"
+            f"📆 {sk.get('js_experience') or '—'}\n"
+            f"🎓 {sk.get('js_education') or '—'}\n"
+            f"🗺 {sk.get('js_province') or '—'}\n"
+            f"🏷 {', '.join(cats[:2]) or '—'}\n"
+            f"⭐ {stars(sk.get('rating'), sk.get('rating_count'))}",
+            inline([[
+                ("👁 پروفایل", f"viewseeker:{sk['chat_id']}"),
+                ("💬 پیام", f"dmseeker:{sk['chat_id']}:{job_id}"),
+            ]]))
+
+
+async def activity_log(s, cid):
+    user = db.get_user(cid)
+    if not user: return
+
+    items = db.get_activity_log(cid)
+    if not items:
+        await api.send_message(s, cid, "📋 هنوز فعالیتی ندارید", menu_for(user))
+        return
+
+    lines = ["📋 *تاریخچه فعالیت شما:*\n"]
+    for item in items:
+        lines.append(f"• {item['act']}: *{item['detail']}*\n  📅 {item['dt']}")
+
+    await api.send_message(s, cid, "\n\n".join(lines), menu_for(user))
+
+
+async def start_dm(s, cid, to_cid, job_id):
+    user = db.get_user(cid)
+    if not user or user["role"] != "job_seeker":
+        await api.send_message(s, cid, "⛔ فقط کارجو می‌تواند پیام بفرستد"); return
+
+    emp  = db.get_user(to_cid)
+    job  = db.get_job(job_id)
+    if not emp or not job:
+        await api.send_message(s, cid, "❌ یافت نشد"); return
+
+    db.set_state(cid, DM_STATE, {"dm_to": to_cid, "dm_job": job_id})
+    await api.send_message(s, cid,
+        f"💬 *پیام به {emp['emp_company'] or emp['emp_name']}*\n"
+        f"درباره آگهی: *{job['title']}*\n\n"
+        f"پیام خود را بنویسید:",
+        reply_kb([["🔙 بازگشت"]]))
+
+
+async def edit_emp_menu(s, cid):
+    user = db.get_user(cid)
+    if not user or user["role"] != "employer": return
+    await api.send_message(s, cid,
+        "✏️ *ویرایش پروفایل کارفرما*\n\nکدام فیلد را ویرایش کنید؟",
+        inline([
+            [("نام",        "edit_emp:emp_name"),
+             ("شرکت",       "edit_emp:emp_company")],
+            [("صنعت",       "edit_emp:emp_industry"),
+             ("تلفن",       "edit_emp:emp_phone")],
+            [("سمت",        "edit_emp:emp_position"),
+             ("آدرس",       "edit_emp:emp_address")],
+            [("ایمیل",      "edit_emp:emp_email"),
+             ("وب‌سایت",    "edit_emp:emp_website")],
+        ]))
+
+
+async def edit_js_menu(s, cid):
+    user = db.get_user(cid)
+    if not user or user["role"] != "job_seeker": return
+    await api.send_message(s, cid,
+        "✏️ *ویرایش پروفایل کارجو*\n\nکدام فیلد را ویرایش کنید؟",
+        inline([
+            [("نام",         "edit_js:js_name"),
+             ("تلفن",        "edit_js:js_phone")],
+            [("شغل مورد نظر","edit_js:js_job_title"),
+             ("استان",       "edit_js:js_province")],
+            [("تجربه",       "edit_js:js_experience"),
+             ("تحصیلات",    "edit_js:js_education")],
+            [("حقوق",        "edit_js:js_salary_min"),
+             ("درباره من",   "edit_js:js_about")],
+            [("دسته‌ها",     "edit_js:js_categories"),
+             ("مهارت‌ها",   "edit_js:js_skills")],
+        ]))
+
+
+async def edit_job_menu(s, cid, job_id):
+    job = db.get_job(job_id)
+    if not job or job["emp_cid"] != cid: return
+    await api.send_message(s, cid,
+        f"✏️ *ویرایش آگهی: {job['title']}*\n\nکدام فیلد؟",
+        inline([
+            [("عنوان",      f"edit_job:{job_id}:title"),
+             ("نوع همکاری", f"edit_job:{job_id}:emp_type")],
+            [("حقوق",       f"edit_job:{job_id}:salary"),
+             ("توضیحات",    f"edit_job:{job_id}:description")],
+            [("🗑 حذف آگهی", f"delete_job:{job_id}")],
+        ]))
+
+# ─── END of helper functions ───
 
 async def handle_menu_btn(s, cid, text):
     m = {
@@ -1885,171 +2045,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-# ══════════════════════════════════════════════════════════════════════════
-# تطابق هوشمند
-# ══════════════════════════════════════════════════════════════════════════
-async def smart_match_jobs(s, cid):
-    """نمایش آگهی‌های پیشنهادی بر اساس پروفایل"""
-    user = db.get_user(cid)
-    if not user or user["role"] != "job_seeker": return
-
-    await api.send_message(s, cid, "🤖 *در حال تطابق هوشمند...*")
-    matches = db.get_matched_jobs(cid, limit=10)
-
-    if not matches:
-        await api.send_message(s, cid,
-            "❌ آگهی‌ای متناسب با پروفایل شما یافت نشد.\n\n"
-            "💡 پروفایل خود را تکمیل کنید تا بهتر تطابق یابد.",
-            menu_for(user))
-        return
-
-    await api.send_message(s, cid, f"✅ *{len(matches)} آگهی متناسب با شما:*")
-    for score, job in matches:
-        bar = "🟢" * (score//20) + "⬜" * (5 - score//20)
-        await api.send_message(s, cid,
-            f"{bar} *تطابق: {score}%*\n\n"
-            f"💼 *{job['title']}*\n"
-            f"🏷 {job['category']}\n"
-            f"💰 {fmt_salary(job.get('salary_min'), job.get('salary_max'))}\n"
-            f"🗺 {job.get('province') or '—'}\n"
-            f"🤝 {job.get('emp_type') or '—'}",
-            inline([[
-                ("📄 ارسال رزومه", f"applyjob:{job['job_id']}"),
-                ("🔖 ذخیره", f"bookmark:{job['job_id']}"),
-            ]]))
-    await show_menu(s, cid, user)
-
-
-async def smart_match_seekers(s, cid, job_id):
-    """نمایش کارجوهای پیشنهادی برای آگهی"""
-    user = db.get_user(cid)
-    if not user or user["role"] != "employer": return
-
-    job = db.get_job(job_id)
-    if not job:
-        await api.send_message(s, cid, "❌ آگهی یافت نشد"); return
-
-    await api.send_message(s, cid, f"🤖 *جستجوی هوشمند برای آگهی {job['title']}...*")
-    matches = db.get_matched_seekers(job_id, limit=10)
-
-    if not matches:
-        await api.send_message(s, cid, "❌ کارجوی متناسبی یافت نشد")
-        return
-
-    await api.send_message(s, cid, f"✅ *{len(matches)} کارجوی متناسب:*")
-    for score, sk in matches:
-        bar  = "🟢" * (score//20) + "⬜" * (5 - score//20)
-        cats = jlist(sk.get("js_categories","[]"))
-        name = (sk.get("js_name") or "").split()[0] or "—"
-        await api.send_message(s, cid,
-            f"{bar} *تطابق: {score}%*\n\n"
-            f"👤 {name}\n"
-            f"📆 {sk.get('js_experience') or '—'}\n"
-            f"🎓 {sk.get('js_education') or '—'}\n"
-            f"🗺 {sk.get('js_province') or '—'}\n"
-            f"🏷 {', '.join(cats[:2]) or '—'}\n"
-            f"⭐ {stars(sk.get('rating'), sk.get('rating_count'))}",
-            inline([[
-                ("👁 پروفایل", f"viewseeker:{sk['chat_id']}"),
-                ("💬 پیام", f"dmseeker:{sk['chat_id']}:{job_id}"),
-            ]]))
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# تاریخچه فعالیت
-# ══════════════════════════════════════════════════════════════════════════
-async def activity_log(s, cid):
-    user = db.get_user(cid)
-    if not user: return
-
-    items = db.get_activity_log(cid)
-    if not items:
-        await api.send_message(s, cid, "📋 هنوز فعالیتی ندارید", menu_for(user))
-        return
-
-    lines = ["📋 *تاریخچه فعالیت شما:*\n"]
-    for item in items:
-        lines.append(f"• {item['act']}: *{item['detail']}*\n  📅 {item['dt']}")
-
-    await api.send_message(s, cid, "\n\n".join(lines), menu_for(user))
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# پیام مستقیم کارجو به کارفرما
-# ══════════════════════════════════════════════════════════════════════════
-DM_STATE = "DM_WRITE"
-
-async def start_dm(s, cid, to_cid, job_id):
-    user = db.get_user(cid)
-    if not user or user["role"] != "job_seeker":
-        await api.send_message(s, cid, "⛔ فقط کارجو می‌تواند پیام بفرستد"); return
-
-    emp  = db.get_user(to_cid)
-    job  = db.get_job(job_id)
-    if not emp or not job:
-        await api.send_message(s, cid, "❌ یافت نشد"); return
-
-    db.set_state(cid, DM_STATE, {"dm_to": to_cid, "dm_job": job_id})
-    await api.send_message(s, cid,
-        f"💬 *پیام به {emp['emp_company'] or emp['emp_name']}*\n"
-        f"درباره آگهی: *{job['title']}*\n\n"
-        f"پیام خود را بنویسید:",
-        reply_kb([["🔙 بازگشت"]]))
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# ویرایش پروفایل
-# ══════════════════════════════════════════════════════════════════════════
-EDIT_EMP_FIELD = "EDIT_EMP_FIELD"
-EDIT_JS_FIELD  = "EDIT_JS_FIELD"
-EDIT_JOB_FIELD = "EDIT_JOB_FIELD"
-
-async def edit_emp_menu(s, cid):
-    user = db.get_user(cid)
-    if not user or user["role"] != "employer": return
-    await api.send_message(s, cid,
-        "✏️ *ویرایش پروفایل کارفرما*\n\nکدام فیلد را ویرایش کنید؟",
-        inline([
-            [("نام",        "edit_emp:emp_name"),
-             ("شرکت",       "edit_emp:emp_company")],
-            [("صنعت",       "edit_emp:emp_industry"),
-             ("تلفن",       "edit_emp:emp_phone")],
-            [("سمت",        "edit_emp:emp_position"),
-             ("آدرس",       "edit_emp:emp_address")],
-            [("ایمیل",      "edit_emp:emp_email"),
-             ("وب‌سایت",    "edit_emp:emp_website")],
-        ]))
-
-
-async def edit_js_menu(s, cid):
-    user = db.get_user(cid)
-    if not user or user["role"] != "job_seeker": return
-    await api.send_message(s, cid,
-        "✏️ *ویرایش پروفایل کارجو*\n\nکدام فیلد را ویرایش کنید؟",
-        inline([
-            [("نام",         "edit_js:js_name"),
-             ("تلفن",        "edit_js:js_phone")],
-            [("شغل مورد نظر","edit_js:js_job_title"),
-             ("استان",       "edit_js:js_province")],
-            [("تجربه",       "edit_js:js_experience"),
-             ("تحصیلات",    "edit_js:js_education")],
-            [("حقوق",        "edit_js:js_salary_min"),
-             ("درباره من",   "edit_js:js_about")],
-            [("دسته‌ها",     "edit_js:js_categories"),
-             ("مهارت‌ها",   "edit_js:js_skills")],
-        ]))
-
-
-async def edit_job_menu(s, cid, job_id):
-    job = db.get_job(job_id)
-    if not job or job["emp_cid"] != cid: return
-    await api.send_message(s, cid,
-        f"✏️ *ویرایش آگهی: {job['title']}*\n\nکدام فیلد؟",
-        inline([
-            [("عنوان",      f"edit_job:{job_id}:title"),
-             ("نوع همکاری", f"edit_job:{job_id}:emp_type")],
-            [("حقوق",       f"edit_job:{job_id}:salary"),
-             ("توضیحات",    f"edit_job:{job_id}:description")],
-            [("🗑 حذف آگهی", f"delete_job:{job_id}")],
-        ]))
+    
