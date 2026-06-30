@@ -101,8 +101,8 @@ def emp_menu():
 
 def js_menu():
     return reply_kb([
-        ["🔍 جستجوی آگهی",     "📄 ارسال رزومه"],
-        ["🤖 پیشنهاد هوشمند",  "📊 درخواست‌های من"],
+        ["🔍 جستجوی آگهی",   "📊 درخواست‌های من"],
+        # ["🤖 پیشنهاد هوشمند",  "📄 ارسال رزومه"],
         ["🔖 آگهی‌های ذخیره‌شده","🔔 اعلان‌ها"],
         ["📋 تاریخچه فعالیت",  "👤 پروفایل"],
         ["⚙️ تنظیمات",          "🔄 تغییر نقش"],
@@ -286,8 +286,8 @@ async def smart_match_seekers(s, cid, job_id):
                 ("💬 پیام", f"dmseeker:{sk['chat_id']}:{job_id}"),
             ]]))
 
-
-async def activity_log(s, cid):
+# delete later
+# async def activity_log(s, cid):
     user = db.get_user(cid)
     if not user: return
 
@@ -302,6 +302,25 @@ async def activity_log(s, cid):
 
     await api.send_message(s, cid, "\n\n".join(lines), menu_for(user))
 
+async def activity_log(s, cid):
+    user = db.get_user(cid)
+    if not user:
+        await api.send_message(s, cid, 
+            "❌ شما در دیتابیس ثبت‌نام کامل ندارید.\n"
+            "لطفاً با /start ثبت‌نام را کامل کنید.",
+            menu_for(user) if user else remove_kb())
+        return
+
+    items = db.get_activity_log(cid)
+    if not items:
+        await api.send_message(s, cid, "📋 هنوز فعالیتی ندارید", menu_for(user))
+        return
+
+    lines = ["📋 *تاریخچه فعالیت شما:*\n"]
+    for item in items:
+        lines.append(f"• {item['act']}: *{item['detail']}*\n  📅 {item['dt']}")
+
+    await api.send_message(s, cid, "\n\n".join(lines), menu_for(user))
 
 async def start_dm(s, cid, to_cid, job_id):
     user = db.get_user(cid)
