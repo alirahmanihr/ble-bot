@@ -286,32 +286,20 @@ async def smart_match_seekers(s, cid, job_id):
                 ("💬 پیام", f"dmseeker:{sk['chat_id']}:{job_id}"),
             ]]))
 
-# delete later
-# async def activity_log(s, cid):
-    user = db.get_user(cid)
-    if not user: return
-
-    items = db.get_activity_log(cid)
-    if not items:
-        await api.send_message(s, cid, "📋 هنوز فعالیتی ندارید", menu_for(user))
-        return
-
-    lines = ["📋 *تاریخچه فعالیت شما:*\n"]
-    for item in items:
-        lines.append(f"• {item['act']}: *{item['detail']}*\n  📅 {item['dt']}")
-
-    await api.send_message(s, cid, "\n\n".join(lines), menu_for(user))
-
 async def activity_log(s, cid):
+    log.info(f"📌 activity_log called for {cid}")  # <--- این خط را اضافه کنید
     user = db.get_user(cid)
     if not user:
+        log.warning(f"❌ User {cid} not found in database")  # <--- این خط را اضافه کنید
         await api.send_message(s, cid, 
             "❌ شما در دیتابیس ثبت‌نام کامل ندارید.\n"
             "لطفاً با /start ثبت‌نام را کامل کنید.",
-            menu_for(user) if user else remove_kb())
+            remove_kb())
         return
 
     items = db.get_activity_log(cid)
+    log.info(f"📊 Activity items count: {len(items)}")  # <--- این خط را اضافه کنید
+
     if not items:
         await api.send_message(s, cid, "📋 هنوز فعالیتی ندارید", menu_for(user))
         return
@@ -321,7 +309,7 @@ async def activity_log(s, cid):
         lines.append(f"• {item['act']}: *{item['detail']}*\n  📅 {item['dt']}")
 
     await api.send_message(s, cid, "\n\n".join(lines), menu_for(user))
-
+    
 async def start_dm(s, cid, to_cid, job_id):
     user = db.get_user(cid)
     if not user or user["role"] != "job_seeker":

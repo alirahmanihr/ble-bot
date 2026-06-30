@@ -11,7 +11,7 @@ for p in os.getenv("ADMIN_IDS", "").split(","):
     if p.isdigit():
         ADMIN_IDS.add(int(p))
 
-CHANNEL_1  = os.getenv("CHANNEL_1", "@hamrakar")
+CHANNEL_1  = os.getenv("CHANNEL_1", "@Hamrakar_Admin")
 CHANNEL_2  = os.getenv("CHANNEL_2", "@hamrakarjob")
 BOT_NAME   = "رسانه استخدامی همراکار"
 SLOGAN     = "✨ ما به توان انسان‌ها باور داریم ✨"
