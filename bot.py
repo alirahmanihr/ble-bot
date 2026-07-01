@@ -18,8 +18,6 @@ import asyncio, json, logging, re
 import aiohttp
 from logging.handlers import RotatingFileHandler
 
-from matplotlib import text
-
 import bale_api as api
 import database as db
 from config import TOKEN, ADMIN_IDS, CHANNEL_1, CHANNEL_2, BOT_NAME, SLOGAN, SLOGAN_EMP, THANKS
