@@ -332,9 +332,9 @@ async def edit_emp_menu(s, cid):
         "✏️ *ویرایش پروفایل کارفرما*\n\nکدام فیلد را ویرایش کنید؟",
         inline([
             [("نام",        "edit_emp:emp_name"),
-             ("شماره موبایل","edit_emp:emp_phone")],  # <--- شماره کارفرما
-            [("شرکت",       "edit_emp:emp_company"),
-             ("صنعت",       "edit_emp:emp_industry")],
+             ("شرکت",       "edit_emp:emp_company")],
+            [("صنعت",       "edit_emp:emp_industry"),
+             ("تلفن",       "edit_emp:emp_phone")],
             [("سمت",        "edit_emp:emp_position"),
              ("آدرس",       "edit_emp:emp_address")],
             [("ایمیل",      "edit_emp:emp_email"),
@@ -349,7 +349,7 @@ async def edit_js_menu(s, cid):
         "✏️ *ویرایش پروفایل کارجو*\n\nکدام فیلد را ویرایش کنید؟",
         inline([
             [("نام",         "edit_js:js_name"),
-             ("شماره موبایل","edit_js:js_phone")],  # <--- شماره کارجو
+             ("تلفن",        "edit_js:js_phone")],
             [("شغل مورد نظر","edit_js:js_job_title"),
              ("استان",       "edit_js:js_province")],
             [("تجربه",       "edit_js:js_experience"),
@@ -422,17 +422,9 @@ async def handle_state(s, cid, state, data, text, doc, photos):
         await api.send_message(s, cid, "🏭 صنعت شرکت:", paginate(INDUSTRIES, [], "ind", 0, cols=1))
 
     elif state == ER_PHONE:
-        phone = text.replace(" ", "")
-        if not re.search(r'09\d{9}', phone):
-            await api.send_message(s, cid, "❌ شماره موبایل معتبر وارد کنید (مثال: 09123456789)")
-            return
-    
-        existing = db.get_user_by_phone(phone, role="employer")
-        if existing and existing["chat_id"] != cid:
-            await api.send_message(s, cid, "❌ این شماره تماس قبلاً برای یک کارفرمای دیگر ثبت شده است.")
-            return
-    
-        data["emp_phone"] = phone
+        if not re.search(r'09\d{9}', text.replace(" ","")):
+            await api.send_message(s, cid, "❌ شماره موبایل معتبر وارد کنید (مثال: 09123456789)"); return
+        data["emp_phone"] = text
         db.set_state(cid, ER_POSITION, data)
         await api.send_message(s, cid, "💼 سمت شغلی شما:", reply_kb([["🔙 بازگشت"]]))
 
@@ -472,20 +464,10 @@ async def handle_state(s, cid, state, data, text, doc, photos):
         await api.send_message(s, cid, "📞 شماره موبایل:", reply_kb([["🔙 بازگشت"]]))
 
     elif state == JS_PHONE:
-        phone = text.replace(" ", "")
-        if not re.search(r'09\d{9}', phone):
-            await api.send_message(s, cid, "❌ شماره موبایل معتبر وارد کنید")
-            return
-    
-        existing = db.get_user_by_phone(phone, role="job_seeker")
-        if existing and existing["chat_id"] != cid:
-            await api.send_message(s, cid, "❌ این شماره تماس قبلاً برای یک کارجوی دیگر ثبت شده است.")
-            return
-    
-        db.upsert_user(cid, 
-            role="job_seeker",
-            js_name=data.get("js_name"),
-            js_phone=phone)
+        if not re.search(r'09\d{9}', text.replace(" ","")):
+            await api.send_message(s, cid, "❌ شماره موبایل معتبر وارد کنید"); return
+        db.upsert_user(cid, role="job_seeker",
+                       js_name=data.get("js_name"), js_phone=text)
         db.clear_state(cid)
         user = db.get_user(cid)
         await api.send_message(s, cid,
@@ -963,34 +945,15 @@ async def handle_extended_state(s, cid, state, data, text) -> bool:
     if state == EDIT_JS_FIELD:
         field = data.get("edit_field")
         if field and field not in ("js_experience","js_education","js_province","js_categories","js_skills"):
-         val = "" if text == "0" else text
-        if field == "js_salary_min":
+            val = "" if text == "0" else text
+            if field == "js_salary_min":
                 val = parse_int(text)
-        elif field == "js_phone":  # ویرایش شماره کارجو
-                phone = val.replace(" ", "")
-                if not re.search(r'09\d{9}', phone):
-                    await api.send_message(s, cid, "❌ شماره موبایل معتبر وارد کنید")
-                    return
-            # بررسی unique بودن
-                existing = db.get_user_by_phone(phone, role="job_seeker")
-                if existing and existing["chat_id"] != cid:
-                    await api.send_message(s, cid, "❌ این شماره تماس قبلاً برای یک کارجوی دیگر ثبت شده است.")
-                    return
-                db.upsert_user(cid, js_phone=phone)
-                db.clear_state(cid)
-                await api.send_message(s, cid, "✅ شماره موبایل بروزرسانی شد!")
-                u = db.get_user(cid)
-                if u: await show_menu(s, cid, u)
-                return
-        
-        db.upsert_user(cid, **{field: val})
-        db.clear_state(cid)
-        await api.send_message(s, cid, "✅ بروزرسانی شد!")
-        u = db.get_user(cid)
-        if u: await show_menu(s, cid, u)
-    return True
-
-# همین کار را برای EDIT_EMP_FIELD با فیلد emp_phone انجام دهید
+            db.upsert_user(cid, **{field: val})
+            db.clear_state(cid)
+            await api.send_message(s, cid, "✅ بروزرسانی شد!")
+            u = db.get_user(cid)
+            if u: await show_menu(s, cid, u)
+        return True
 
     # ── ویرایش آگهی ──────────────────────────────────────────────────
     if state == EDIT_JOB_FIELD:
@@ -1380,44 +1343,17 @@ async def on_cb(s, cb):
     # ── تأیید تغییر نقش ──────────────────────────────────────────────────
     if d == "cr:yes":
         user = db.get_user(cid)
-        if not user:
-            await api.send_message(s, cid, "❌ ابتدا ثبت‌نام کنید: /start")
-            return
-    
-        old = user["role"]
-        new = "job_seeker" if old == "employer" else "employer"
-    
-        # بررسی وجود اطلاعات نقش جدید
-        if new == "employer" and user["emp_name"] and user["emp_phone"]:
-            # اطلاعات کارفرما کامل است
-            db.upsert_user(cid, role=new)
-            db.clear_state(cid)
-            await show_menu(s, cid, user, "✅ نقش شما با موفقیت به کارفرما تغییر کرد!")
-            return
-    
-        elif new == "job_seeker" and user["js_name"] and user["js_phone"]:
-            # اطلاعات کارجو کامل است
-            db.upsert_user(cid, role=new)
-            db.clear_state(cid)
-            await show_menu(s, cid, user, "✅ نقش شما با موفقیت به کارجو تغییر کرد!")
-            return
-    
+        old  = user["role"] if user else None
+        new  = "job_seeker" if old == "employer" else "employer"
+        db.upsert_user(cid, role=new)
+        db.clear_state(cid)
+        if new == "employer":
+            db.set_state(cid, ER_NAME)
+            await api.send_message(s, cid, "✅ *کارفرما*\n\nنام:", reply_kb([["🔙 بازگشت"]]))
         else:
-            # اطلاعات نقش جدید ناقص است، شروع ثبت‌نام
-            db.upsert_user(cid, role=new)
-            db.clear_state(cid)
-            if new == "employer":
-                db.set_state(cid, ER_NAME)
-                await api.send_message(s, cid, 
-                    "✅ *کارفرما انتخاب شد*\n\n"
-                    "👤 نام و نام خانوادگی خود را وارد کنید:",
-                    reply_kb([["🔙 بازگشت"]]))
-            else:
-                db.set_state(cid, JS_NAME)
-                await api.send_message(s, cid, 
-                    "✅ *کارجو انتخاب شد*\n\n"
-                    "👤 نام و نام خانوادگی خود را وارد کنید:",
-                    reply_kb([["🔙 بازگشت"]]))
+            db.set_state(cid, JS_NAME)
+            await api.send_message(s, cid, "✅ *کارجو*\n\nنام:", reply_kb([["🔙 بازگشت"]]))
+        return
 
     if d == "cr:no":
         db.clear_state(cid)

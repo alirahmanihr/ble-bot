@@ -77,7 +77,7 @@ def init_db():
             emp_name         TEXT,
             emp_company      TEXT,
             emp_industry     TEXT,
-            emp_phone        TEXT UNIQUE,  -- <--- UNIQUE اضافه شد
+            emp_phone        TEXT,
             emp_position     TEXT,
             emp_address      TEXT,
             emp_email        TEXT,
@@ -87,7 +87,7 @@ def init_db():
             emp_age_max      INTEGER,
             -- کارجو
             js_name          TEXT,
-            js_phone         TEXT UNIQUE,  -- <--- UNIQUE اضافه شد
+            js_phone         TEXT,
             js_province      TEXT,
             js_job_title     TEXT,
             js_experience    TEXT,
@@ -114,11 +114,115 @@ def init_db():
             last_active      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        -- ... بقیه جداول
+
+        CREATE TABLE IF NOT EXISTS user_states (
+            chat_id     INTEGER PRIMARY KEY,
+            state       TEXT DEFAULT 'IDLE',
+            data        TEXT DEFAULT '{}',
+            updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(chat_id) REFERENCES users(chat_id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS jobs (
+            job_id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            emp_cid          INTEGER NOT NULL,
+            title            TEXT NOT NULL,
+            emp_type         TEXT,
+            province         TEXT,
+            city             TEXT,
+            salary_min       INTEGER DEFAULT 0,
+            salary_max       INTEGER DEFAULT 0,
+            category         TEXT NOT NULL,
+            gender_need      TEXT,
+            age_min          INTEGER,
+            age_max          INTEGER,
+            education_need   TEXT,
+            experience_need  TEXT,
+            description      TEXT,
+            benefits         TEXT,
+            status           TEXT DEFAULT 'pending'
+                             CHECK(status IN ('pending','active','rejected','expired','closed')),
+            admin_approved   INTEGER DEFAULT 0,
+            views            INTEGER DEFAULT 0,
+            app_count        INTEGER DEFAULT 0,
+            post_date        TEXT,
+            expiry_date      TEXT,
+            created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(emp_cid) REFERENCES users(chat_id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS applications (
+            app_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id        INTEGER NOT NULL,
+            seeker_cid    INTEGER NOT NULL,
+            cover_letter  TEXT,
+            resume_file   TEXT,
+            resume_type   TEXT CHECK(resume_type IN ('pdf','docx','photo')),
+            file_size     INTEGER DEFAULT 0,
+            status        TEXT DEFAULT 'pending_admin'
+                          CHECK(status IN ('pending_admin','approved','rejected','seen')),
+            sent_date     TEXT,
+            seen_date     TEXT,
+            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(job_id, seeker_cid),
+            FOREIGN KEY(job_id)     REFERENCES jobs(job_id) ON DELETE CASCADE,
+            FOREIGN KEY(seeker_cid) REFERENCES users(chat_id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS ratings (
+            rating_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+            from_cid    INTEGER NOT NULL,
+            to_cid      INTEGER NOT NULL,
+            job_id      INTEGER,
+            score       INTEGER CHECK(score BETWEEN 1 AND 5),
+            comment     TEXT,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(from_cid, to_cid, job_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS bookmarks (
+            bm_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_cid    INTEGER NOT NULL,
+            job_id      INTEGER NOT NULL,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_cid, job_id),
+            FOREIGN KEY(user_cid) REFERENCES users(chat_id) ON DELETE CASCADE,
+            FOREIGN KEY(job_id)   REFERENCES jobs(job_id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS notifications (
+            notif_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_cid    INTEGER NOT NULL,
+            text        TEXT NOT NULL,
+            is_read     INTEGER DEFAULT 0,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(user_cid) REFERENCES users(chat_id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS admin_logs (
+            log_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            admin_cid   INTEGER NOT NULL,
+            action      TEXT NOT NULL,
+            target_id   INTEGER,
+            note        TEXT,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_jobs_cat     ON jobs(category, status);
+        CREATE INDEX IF NOT EXISTS idx_jobs_prov    ON jobs(province, status);
+        CREATE INDEX IF NOT EXISTS idx_jobs_emp     ON jobs(emp_cid);
+        CREATE INDEX IF NOT EXISTS idx_jobs_expiry  ON jobs(expiry_date, status);
+        CREATE INDEX IF NOT EXISTS idx_apps_job     ON applications(job_id);
+        CREATE INDEX IF NOT EXISTS idx_apps_seeker  ON applications(seeker_cid);
+        CREATE INDEX IF NOT EXISTS idx_apps_status  ON applications(status);
+        CREATE INDEX IF NOT EXISTS idx_users_role   ON users(role);
+        CREATE INDEX IF NOT EXISTS idx_states       ON user_states(chat_id);
+        CREATE INDEX IF NOT EXISTS idx_notif_user   ON notifications(user_cid, is_read);
+        CREATE INDEX IF NOT EXISTS idx_bookmarks    ON bookmarks(user_cid);
         """)
         c.commit()
         c.close()
-        
+
 # ══════════════════════════════════════════════════════════════════════════
 # State - Persistent در DB (نه RAM)
 # ══════════════════════════════════════════════════════════════════════════
@@ -580,20 +684,6 @@ def jlist(text):
     try:    return json.loads(text)
     except: return []
 
-
-def get_user_by_phone(phone, role=None):
-    """دریافت کاربر بر اساس شماره تماس و نقش"""
-    with _lock:
-        c = _c()
-        if role == "employer":
-            row = c.execute("SELECT * FROM users WHERE emp_phone=? AND role='employer'", (phone,)).fetchone()
-        elif role == "job_seeker":
-            row = c.execute("SELECT * FROM users WHERE js_phone=? AND role='job_seeker'", (phone,)).fetchone()
-        else:
-            row = c.execute("SELECT * FROM users WHERE emp_phone=? OR js_phone=?", (phone, phone)).fetchone()
-        c.close()
-    return row
-
 # ══════════════════════════════════════════════════════════════════════════
 # تطابق هوشمند
 # ══════════════════════════════════════════════════════════════════════════
@@ -789,4 +879,3 @@ def delete_job(job_id, emp_cid):
         c = _c()
         c.execute("DELETE FROM jobs WHERE job_id=? AND emp_cid=?", (job_id, emp_cid))
         c.commit(); c.close()
-
