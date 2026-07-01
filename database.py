@@ -1,6 +1,5 @@
 """
-دیتابیس همراکار - نسخه تولیدی نهایی
-پشتیبانی از شماره تماس مستقل برای هر نقش، تاریخچه فعالیت، امتیازدهی دوطرفه
+دیتابیس همراکار - نسخه نهایی با پشتیبانی از اجازه ارسال به کارفرما
 """
 import sqlite3, json, re
 from datetime import datetime, timedelta
@@ -53,7 +52,7 @@ SKILLS_LIST = [
     "Photoshop","Illustrator","حسابداری","مذاکره","فروش",
     "بازاریابی دیجیتال","SEO","مدیریت پروژه","PMP","ICDL","زبان انگلیسی",
     "تحلیل داده","مدیریت تیم","رهبری","ارتباط موثر","حل مسئله",
-    "بدون مهارت"
+    "عمومی", "سایر", "بدون مهارت"
 ]
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -69,7 +68,6 @@ def _c():
     return c
 
 def init_db():
-    """ایجاد تمام جداول و ایندکس‌ها در صورت عدم وجود"""
     with _lock:
         c = _c()
         c.executescript("""
@@ -107,6 +105,8 @@ def init_db():
             js_about         TEXT,
             js_resume_file   TEXT,
             js_resume_type   TEXT,
+            work_experience  TEXT DEFAULT '[]',
+            allow_employer_notify INTEGER DEFAULT 0,  -- جدید: اجازه ارسال به کارفرما
             -- مشترک
             rating           REAL DEFAULT 0.0,
             rating_count     INTEGER DEFAULT 0,
@@ -161,10 +161,11 @@ def init_db():
             seeker_cid    INTEGER NOT NULL,
             cover_letter  TEXT,
             resume_file   TEXT,
-            resume_type   TEXT CHECK(resume_type IN ('pdf','docx','photo')),
+            resume_type   TEXT CHECK(resume_type IN ('pdf','docx','photo','audio','voice')),
             file_size     INTEGER DEFAULT 0,
             status        TEXT DEFAULT 'pending_admin'
                           CHECK(status IN ('pending_admin','approved','rejected','seen')),
+            admin_note    TEXT,
             sent_date     TEXT,
             seen_date     TEXT,
             created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -217,6 +218,7 @@ def init_db():
             user_cid    INTEGER NOT NULL,
             action      TEXT NOT NULL,
             detail      TEXT,
+            result      TEXT,
             created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(user_cid) REFERENCES users(chat_id) ON DELETE CASCADE
         );
@@ -250,7 +252,7 @@ def init_db():
         c.close()
 
 # ══════════════════════════════════════════════════════════════════════════
-# State - مدیریت وضعیت کاربر در دیتابیس
+# State
 # ══════════════════════════════════════════════════════════════════════════
 def get_state(cid):
     with _lock:
@@ -295,7 +297,6 @@ def get_user(cid):
     return row
 
 def get_user_by_phone(phone, role=None):
-    """دریافت کاربر بر اساس شماره تماس و نقش (برای اعتبارسنجی یکتایی)"""
     if not phone:
         return None
     with _lock:
@@ -310,7 +311,6 @@ def get_user_by_phone(phone, role=None):
     return row
 
 def upsert_user(cid, **f):
-    """درج یا بروزرسانی کاربر با فیلدهای داده‌شده"""
     if not f: return
     f["last_active"] = datetime.now().isoformat()
     with _lock:
@@ -353,17 +353,50 @@ def get_users_by_category(category):
         c = _c()
         rows = c.execute(
             "SELECT chat_id FROM users WHERE role='job_seeker' AND is_banned=0 "
-            "AND private_mode=0 AND js_categories LIKE ?",
+            "AND private_mode=0 AND allow_employer_notify=1 AND js_categories LIKE ?",
             (f'%"{category}"%',)
         ).fetchall()
         c.close()
     return rows
 
+def get_matching_seekers_for_job(category, province, city=None):
+    with _lock:
+        c = _c()
+        sql = """SELECT chat_id FROM users 
+                 WHERE role='job_seeker' AND is_banned=0 AND private_mode=0
+                 AND allow_employer_notify=1
+                 AND js_categories LIKE ?
+                 AND (js_province = ? OR js_cities LIKE ?)"""
+        params = [f'%"{category}"%', province, f'%"{province}"%']
+        if city:
+            sql += " OR js_cities LIKE ?"
+            params.append(f'%"{city}"%')
+        rows = c.execute(sql, params).fetchall()
+        c.close()
+    return rows
+
+def get_matching_employers_for_seeker(category, province, cities):
+    with _lock:
+        c = _c()
+        sql = """SELECT DISTINCT emp_cid FROM jobs 
+                 WHERE status='active' AND admin_approved=1
+                 AND category = ?
+                 AND (province = ? OR province IN ({}) OR province = ?)"""
+        if cities:
+            placeholders = ",".join(["?"] * len(cities))
+            sql = sql.format(placeholders)
+            params = [category, province] + cities + [province]
+        else:
+            sql = sql.replace(" OR province IN ({})", "")
+            params = [category, province]
+        rows = c.execute(sql, params).fetchall()
+        c.close()
+        return [r["emp_cid"] for r in rows]
+
 # ══════════════════════════════════════════════════════════════════════════
 # آگهی‌ها
 # ══════════════════════════════════════════════════════════════════════════
 def create_job(emp_cid, **f):
-    """ایجاد آگهی جدید با وضعیت pending"""
     f.update(
         emp_cid=emp_cid,
         post_date=shamsi_now(),
@@ -439,6 +472,25 @@ def reject_job(jid, admin_cid, reason=""):
         c.commit()
         c.close()
 
+def update_job_by_admin(jid, admin_cid, **fields):
+    """ویرایش آگهی توسط ادمین قبل از تأیید"""
+    with _lock:
+        c = _c()
+        # فقط آگهی‌های pending قابل ویرایش هستند
+        job = c.execute("SELECT status FROM jobs WHERE job_id=?", (jid,)).fetchone()
+        if not job or job["status"] != "pending":
+            c.close()
+            return False
+        sets = ", ".join(f"{k}=?" for k in fields)
+        c.execute(f"UPDATE jobs SET {sets} WHERE job_id=?", list(fields.values()) + [jid])
+        c.execute(
+            "INSERT INTO admin_logs(admin_cid, action, target_id) VALUES(?,?,?)",
+            (admin_cid, "edit_job", jid)
+        )
+        c.commit()
+        c.close()
+        return True
+
 def close_job(jid):
     with _lock:
         c = _c()
@@ -463,7 +515,6 @@ def increment_views(jid):
         c.close()
 
 def search_jobs(category=None, province=None, page=0, per=10):
-    """جستجوی ساده آگهی‌ها فقط بر اساس دسته و استان (ساده‌سازی شده)"""
     expire_old_jobs()
     with _lock:
         c = _c()
@@ -508,8 +559,6 @@ def search_seekers(category=None, province=None, experience=None, page=0, per=10
 # ══════════════════════════════════════════════════════════════════════════
 def create_application(job_id, seeker_cid, cover_letter=None,
                        resume_file=None, resume_type=None, file_size=0):
-    if file_size > 5 * 1024 * 1024:
-        return None, "size"
     with _lock:
         c = _c()
         try:
@@ -537,7 +586,7 @@ def get_application(aid):
         row = c.execute(
             "SELECT a.*, u.js_name, u.js_phone, u.js_province, u.js_experience, "
             "u.js_education, u.js_categories, u.js_skills, u.rating, u.js_about, "
-            "j.title, j.category, j.emp_cid FROM applications a "
+            "u.work_experience, j.title, j.category, j.emp_cid FROM applications a "
             "JOIN users u ON a.seeker_cid=u.chat_id "
             "JOIN jobs j ON a.job_id=j.job_id WHERE a.app_id=?",
             (aid,)
@@ -549,7 +598,7 @@ def get_pending_applications(category=None):
     with _lock:
         c = _c()
         sql = ("SELECT a.*, u.js_name, u.js_phone, u.js_experience, u.rating, "
-               "j.title, j.category, j.emp_cid FROM applications a "
+               "u.work_experience, j.title, j.category, j.emp_cid FROM applications a "
                "JOIN users u ON a.seeker_cid=u.chat_id "
                "JOIN jobs j ON a.job_id=j.job_id "
                "WHERE a.status='pending_admin'")
@@ -566,7 +615,7 @@ def get_job_applications(job_id):
     with _lock:
         c = _c()
         rows = c.execute(
-            "SELECT a.*, u.js_name, u.js_phone, u.js_experience, u.rating "
+            "SELECT a.*, u.js_name, u.js_phone, u.js_experience, u.rating, u.work_experience "
             "FROM applications a JOIN users u ON a.seeker_cid=u.chat_id "
             "WHERE a.job_id=? ORDER BY a.created_at DESC",
             (job_id,)
@@ -586,13 +635,13 @@ def get_seeker_applications(seeker_cid):
         c.close()
     return rows
 
-def approve_application(aid, admin_cid):
+def approve_application(aid, admin_cid, note=""):
     with _lock:
         c = _c()
-        c.execute("UPDATE applications SET status='approved' WHERE app_id=?", (aid,))
+        c.execute("UPDATE applications SET status='approved', admin_note=? WHERE app_id=?", (note, aid))
         c.execute(
-            "INSERT INTO admin_logs(admin_cid, action, target_id) VALUES(?,?,?)",
-            (admin_cid, "approve_app", aid)
+            "INSERT INTO admin_logs(admin_cid, action, target_id, note) VALUES(?,?,?,?)",
+            (admin_cid, "approve_app", aid, note)
         )
         c.commit()
         c.close()
@@ -600,13 +649,31 @@ def approve_application(aid, admin_cid):
 def reject_application(aid, admin_cid, reason=""):
     with _lock:
         c = _c()
-        c.execute("UPDATE applications SET status='rejected' WHERE app_id=?", (aid,))
+        c.execute("UPDATE applications SET status='rejected', admin_note=? WHERE app_id=?", (reason, aid))
         c.execute(
             "INSERT INTO admin_logs(admin_cid, action, target_id, note) VALUES(?,?,?,?)",
             (admin_cid, "reject_app", aid, reason)
         )
         c.commit()
         c.close()
+
+def update_application_by_admin(aid, admin_cid, **fields):
+    """ویرایش رزومه توسط ادمین قبل از تأیید"""
+    with _lock:
+        c = _c()
+        app = c.execute("SELECT status FROM applications WHERE app_id=?", (aid,)).fetchone()
+        if not app or app["status"] != "pending_admin":
+            c.close()
+            return False
+        sets = ", ".join(f"{k}=?" for k in fields)
+        c.execute(f"UPDATE applications SET {sets} WHERE app_id=?", list(fields.values()) + [aid])
+        c.execute(
+            "INSERT INTO admin_logs(admin_cid, action, target_id) VALUES(?,?,?)",
+            (admin_cid, "edit_app", aid)
+        )
+        c.commit()
+        c.close()
+        return True
 
 def has_applied(job_id, seeker_cid):
     with _lock:
@@ -659,7 +726,7 @@ def is_bookmarked(user_cid, job_id):
     return bool(row)
 
 # ══════════════════════════════════════════════════════════════════════════
-# امتیاز (دوطرفه)
+# امتیاز
 # ══════════════════════════════════════════════════════════════════════════
 def add_rating(from_cid, to_cid, job_id, score, comment=""):
     with _lock:
@@ -670,7 +737,6 @@ def add_rating(from_cid, to_cid, job_id, score, comment=""):
                 "VALUES(?,?,?,?,?)",
                 (from_cid, to_cid, job_id, score, comment)
             )
-            # به‌روزرسانی میانگین امتیاز کاربر هدف
             avg = c.execute("SELECT AVG(score), COUNT(*) FROM ratings WHERE to_cid=?", (to_cid,)).fetchone()
             new_rating = round(avg[0], 1) if avg[0] else 0.0
             new_count = avg[1] if avg[1] else 0
@@ -752,14 +818,14 @@ def get_admin_logs(limit=20):
     return rows
 
 # ══════════════════════════════════════════════════════════════════════════
-# تاریخچه فعالیت (جدید)
+# تاریخچه فعالیت (با نتیجه)
 # ══════════════════════════════════════════════════════════════════════════
-def add_activity_log(user_cid, action, detail=""):
+def add_activity_log(user_cid, action, detail="", result=""):
     with _lock:
         c = _c()
         c.execute(
-            "INSERT INTO activity_logs(user_cid, action, detail) VALUES(?,?,?)",
-            (user_cid, action, detail)
+            "INSERT INTO activity_logs(user_cid, action, detail, result) VALUES(?,?,?,?)",
+            (user_cid, action, detail, result)
         )
         c.commit()
         c.close()
@@ -788,7 +854,7 @@ def save_direct_message(from_cid, to_cid, job_id, text):
         c.close()
 
 # ══════════════════════════════════════════════════════════════════════════
-# ویرایش آگهی
+# ویرایش آگهی (توسط کاربر)
 # ══════════════════════════════════════════════════════════════════════════
 def update_job(job_id, emp_cid, **fields):
     with _lock:
