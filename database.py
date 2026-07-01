@@ -1,63 +1,65 @@
 """
-دیتابیس همراکار - نسخه نهایی با پشتیبانی از اجازه ارسال به کارفرما
+دیتابیس همراکار - نسخه تولیدی نهایی
 """
-import sqlite3, json, re
+
+import sqlite3
+import json
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Lock
 
 try:
     import jdatetime
-    def shamsi_now(): return jdatetime.datetime.now().strftime("%Y/%m/%d")
-    def shamsi_dt():  return jdatetime.datetime.now().strftime("%Y/%m/%d %H:%M")
+    def shamsi_now():
+        return jdatetime.datetime.now().strftime("%Y/%m/%d")
+    def shamsi_dt():
+        return jdatetime.datetime.now().strftime("%Y/%m/%d %H:%M")
 except:
-    def shamsi_now(): return datetime.now().strftime("%Y/%m/%d")
-    def shamsi_dt():  return datetime.now().strftime("%Y/%m/%d %H:%M")
+    def shamsi_now():
+        return datetime.now().strftime("%Y/%m/%d")
+    def shamsi_dt():
+        return datetime.now().strftime("%Y/%m/%d %H:%M")
 
 DB_PATH = Path(__file__).parent / "hamrakar.db"
-_lock   = Lock()
+_lock = Lock()
 
-# ══════════════════════════════════════════════════════════════════════════
-# ثابت‌ها
-# ══════════════════════════════════════════════════════════════════════════
 INDUSTRIES = [
-    "فناوری اطلاعات","تولید و صنعت","ساختمان و عمران","بازرگانی",
-    "آموزش","خدمات درمانی","بانکداری و بیمه","بازاریابی",
-    "حمل و نقل","کشاورزی","گردشگری","رسانه","مخابرات","انرژی","سایر"
+    "فناوری اطلاعات", "تولید و صنعت", "ساختمان و عمران", "بازرگانی",
+    "آموزش", "خدمات درمانی", "بانکداری و بیمه", "بازاریابی",
+    "حمل و نقل", "کشاورزی", "گردشگری", "رسانه", "مخابرات", "انرژی", "سایر"
 ]
 
 CATEGORIES = [
-    "حسابداری","آموزش","بازاریابی","گردشگری","تولید","تدارکات",
-    "مهندسی","کشاورزی","فروش","پزشکی","مدیریت","برنامه‌نویسی",
-    "غذایی","معماری","HSE","تجارت","CEO","HR","طراحی","حقوقی",
-    "دولتی","مهندسی‌پزشکی","IT","خودرو","محتوا","مشتریان","R&D","روابط‌عمومی",
-    "عمومی", "سایر"
+    "حسابداری", "آموزش", "بازاریابی", "گردشگری", "تولید", "تدارکات",
+    "مهندسی", "کشاورزی", "فروش", "پزشکی", "مدیریت", "برنامه‌نویسی",
+    "غذایی", "معماری", "HSE", "تجارت", "CEO", "HR", "طراحی", "حقوقی",
+    "دولتی", "مهندسی‌پزشکی", "IT", "خودرو", "محتوا", "مشتریان", "R&D",
+    "روابط‌عمومی", "عمومی", "سایر"
 ]
 
 PROVINCES = [
-    "تهران","البرز","مازندران","گیلان","اردبیل","آذربایجان‌شرقی",
-    "آذربایجان‌غربی","کردستان","کرمانشاه","خوزستان","ایلام","بوشهر",
-    "هرمزگان","سیستان","خراسان‌رضوی","خراسان‌شمالی","خراسان‌جنوبی",
-    "قم","سمنان","زنجان","مرکزی","اصفهان","لرستان","فارس",
-    "کرمان","یزد","چهارمحال","کهگیلویه","گلستان","همدان","شیراز"
+    "تهران", "البرز", "مازندران", "گیلان", "اردبیل", "آذربایجان‌شرقی",
+    "آذربایجان‌غربی", "کردستان", "کرمانشاه", "خوزستان", "ایلام", "بوشهر",
+    "هرمزگان", "سیستان", "خراسان‌رضوی", "خراسان‌شمالی", "خراسان‌جنوبی",
+    "قم", "سمنان", "زنجان", "مرکزی", "اصفهان", "لرستان", "فارس",
+    "کرمان", "یزد", "چهارمحال", "کهگیلویه", "گلستان", "همدان", "شیراز"
 ]
 
-EMP_TYPES   = ["تمام‌وقت","پاره‌وقت","دورکاری","پروژه‌ای","فصلی"]
-GENDERS     = ["مرد","زن","بدون‌ترجیح"]
-EXPERIENCES = ["بدون سابقه","کمتر از ۱ سال","۱ تا ۳ سال","۳ تا ۵ سال","بیش از ۵ سال"]
-EDUCATIONS  = ["زیر دیپلم","دیپلم","فوق‌دیپلم","لیسانس","فوق‌لیسانس","دکترا"]
-RELOCATE    = ["بله","فقط شهر خودم","بسته به شرایط"]
+EMP_TYPES = ["تمام‌وقت", "پاره‌وقت", "دورکاری", "پروژه‌ای", "فصلی"]
+GENDERS = ["مرد", "زن", "بدون‌ترجیح"]
+EXPERIENCES = ["بدون سابقه", "کمتر از ۱ سال", "۱ تا ۳ سال", "۳ تا ۵ سال", "بیش از ۵ سال"]
+EDUCATIONS = ["زیر دیپلم", "دیپلم", "فوق‌دیپلم", "لیسانس", "فوق‌لیسانس", "دکترا"]
+RELOCATE = ["بله", "فقط شهر خودم", "بسته به شرایط"]
+
 SKILLS_LIST = [
-    "Excel","Word","Python","Java","PHP","JavaScript","SQL","AutoCAD",
-    "Photoshop","Illustrator","حسابداری","مذاکره","فروش",
-    "بازاریابی دیجیتال","SEO","مدیریت پروژه","PMP","ICDL","زبان انگلیسی",
-    "تحلیل داده","مدیریت تیم","رهبری","ارتباط موثر","حل مسئله",
+    "Excel", "Word", "Python", "Java", "PHP", "JavaScript", "SQL", "AutoCAD",
+    "Photoshop", "Illustrator", "حسابداری", "مذاکره", "فروش",
+    "بازاریابی دیجیتال", "SEO", "مدیریت پروژه", "PMP", "ICDL", "زبان انگلیسی",
+    "تحلیل داده", "مدیریت تیم", "رهبری", "ارتباط موثر", "حل مسئله",
     "عمومی", "سایر", "بدون مهارت"
 ]
 
-# ══════════════════════════════════════════════════════════════════════════
-# اتصال به دیتابیس
-# ══════════════════════════════════════════════════════════════════════════
 def _c():
     c = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
     c.row_factory = sqlite3.Row
@@ -72,223 +74,211 @@ def init_db():
         c = _c()
         c.executescript("""
         CREATE TABLE IF NOT EXISTS users (
-            chat_id          INTEGER PRIMARY KEY,
-            role             TEXT CHECK(role IN ('employer','job_seeker')),
-            -- کارفرما
-            emp_name         TEXT,
-            emp_company      TEXT,
-            emp_industry     TEXT,
-            emp_phone        TEXT UNIQUE,
-            emp_position     TEXT,
-            emp_address      TEXT,
-            emp_email        TEXT,
-            emp_website      TEXT,
-            emp_gender_need  TEXT,
-            emp_age_min      INTEGER,
-            emp_age_max      INTEGER,
-            -- کارجو
-            js_name          TEXT,
-            js_phone         TEXT UNIQUE,
-            js_province      TEXT,
-            js_job_title     TEXT,
-            js_experience    TEXT,
-            js_education     TEXT,
-            js_salary_min    INTEGER DEFAULT 0,
-            js_salary_max    INTEGER DEFAULT 0,
-            js_dob           TEXT,
-            js_gender        TEXT,
-            js_relocate      TEXT,
-            js_cities        TEXT DEFAULT '[]',
-            js_categories    TEXT DEFAULT '[]',
-            js_skills        TEXT DEFAULT '[]',
-            js_languages     TEXT DEFAULT '[]',
-            js_about         TEXT,
-            js_resume_file   TEXT,
-            js_resume_type   TEXT,
-            work_experience  TEXT DEFAULT '[]',
-            allow_employer_notify INTEGER DEFAULT 0,  -- جدید: اجازه ارسال به کارفرما
-            -- مشترک
-            rating           REAL DEFAULT 0.0,
-            rating_count     INTEGER DEFAULT 0,
-            private_mode     INTEGER DEFAULT 0,
-            is_banned        INTEGER DEFAULT 0,
-            ban_reason       TEXT,
-            reg_date         TEXT,
-            last_active      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            chat_id INTEGER PRIMARY KEY,
+            role TEXT CHECK(role IN ('employer','job_seeker')),
+            emp_name TEXT,
+            emp_company TEXT,
+            emp_industry TEXT,
+            emp_phone TEXT UNIQUE,
+            emp_position TEXT,
+            emp_address TEXT,
+            emp_email TEXT,
+            emp_website TEXT,
+            emp_gender_need TEXT,
+            emp_age_min INTEGER,
+            emp_age_max INTEGER,
+            js_name TEXT,
+            js_phone TEXT UNIQUE,
+            js_province TEXT,
+            js_job_title TEXT,
+            js_experience TEXT,
+            js_education TEXT,
+            js_salary_min INTEGER DEFAULT 0,
+            js_salary_max INTEGER DEFAULT 0,
+            js_dob TEXT,
+            js_gender TEXT,
+            js_relocate TEXT,
+            js_cities TEXT DEFAULT '[]',
+            js_categories TEXT DEFAULT '[]',
+            js_skills TEXT DEFAULT '[]',
+            js_languages TEXT DEFAULT '[]',
+            js_about TEXT,
+            js_resume_file TEXT,
+            js_resume_type TEXT,
+            work_experience TEXT DEFAULT '[]',
+            allow_employer_notify INTEGER DEFAULT 0,
+            rating REAL DEFAULT 0.0,
+            rating_count INTEGER DEFAULT 0,
+            private_mode INTEGER DEFAULT 0,
+            is_banned INTEGER DEFAULT 0,
+            ban_reason TEXT,
+            reg_date TEXT,
+            last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
         CREATE TABLE IF NOT EXISTS user_states (
-            chat_id     INTEGER PRIMARY KEY,
-            state       TEXT DEFAULT 'IDLE',
-            data        TEXT DEFAULT '{}',
-            updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            chat_id INTEGER PRIMARY KEY,
+            state TEXT DEFAULT 'IDLE',
+            data TEXT DEFAULT '{}',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(chat_id) REFERENCES users(chat_id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS jobs (
-            job_id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            emp_cid          INTEGER NOT NULL,
-            title            TEXT NOT NULL,
-            emp_type         TEXT,
-            province         TEXT,
-            city             TEXT,
-            salary_min       INTEGER DEFAULT 0,
-            salary_max       INTEGER DEFAULT 0,
-            category         TEXT NOT NULL,
-            gender_need      TEXT,
-            age_min          INTEGER,
-            age_max          INTEGER,
-            education_need   TEXT,
-            experience_need  TEXT,
-            description      TEXT,
-            benefits         TEXT,
-            status           TEXT DEFAULT 'pending'
-                             CHECK(status IN ('pending','active','rejected','expired','closed')),
-            admin_approved   INTEGER DEFAULT 0,
-            approved_date    TEXT,
-            expiry_date      TEXT,
-            views            INTEGER DEFAULT 0,
-            app_count        INTEGER DEFAULT 0,
-            post_date        TEXT,
-            created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            job_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            emp_cid INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            emp_type TEXT,
+            province TEXT,
+            city TEXT,
+            salary_min INTEGER DEFAULT 0,
+            salary_max INTEGER DEFAULT 0,
+            category TEXT NOT NULL,
+            gender_need TEXT,
+            age_min INTEGER,
+            age_max INTEGER,
+            education_need TEXT,
+            experience_need TEXT,
+            description TEXT,
+            benefits TEXT,
+            status TEXT DEFAULT 'pending',
+            admin_approved INTEGER DEFAULT 0,
+            approved_date TEXT,
+            expiry_date TEXT,
+            views INTEGER DEFAULT 0,
+            app_count INTEGER DEFAULT 0,
+            post_date TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(emp_cid) REFERENCES users(chat_id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS applications (
-            app_id        INTEGER PRIMARY KEY AUTOINCREMENT,
-            job_id        INTEGER NOT NULL,
-            seeker_cid    INTEGER NOT NULL,
-            cover_letter  TEXT,
-            resume_file   TEXT,
-            resume_type   TEXT CHECK(resume_type IN ('pdf','docx','photo','audio','voice')),
-            file_size     INTEGER DEFAULT 0,
-            status        TEXT DEFAULT 'pending_admin'
-                          CHECK(status IN ('pending_admin','approved','rejected','seen')),
-            admin_note    TEXT,
-            sent_date     TEXT,
-            seen_date     TEXT,
-            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            app_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER NOT NULL,
+            seeker_cid INTEGER NOT NULL,
+            cover_letter TEXT,
+            resume_file TEXT,
+            resume_type TEXT,
+            file_size INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'pending_admin',
+            admin_note TEXT,
+            sent_date TEXT,
+            seen_date TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(job_id, seeker_cid),
-            FOREIGN KEY(job_id)     REFERENCES jobs(job_id) ON DELETE CASCADE,
+            FOREIGN KEY(job_id) REFERENCES jobs(job_id) ON DELETE CASCADE,
             FOREIGN KEY(seeker_cid) REFERENCES users(chat_id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS ratings (
-            rating_id   INTEGER PRIMARY KEY AUTOINCREMENT,
-            from_cid    INTEGER NOT NULL,
-            to_cid      INTEGER NOT NULL,
-            job_id      INTEGER,
-            score       INTEGER CHECK(score BETWEEN 1 AND 5),
-            comment     TEXT,
-            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            rating_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            from_cid INTEGER NOT NULL,
+            to_cid INTEGER NOT NULL,
+            job_id INTEGER,
+            score INTEGER,
+            comment TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(from_cid, to_cid, job_id)
         );
 
         CREATE TABLE IF NOT EXISTS bookmarks (
-            bm_id       INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_cid    INTEGER NOT NULL,
-            job_id      INTEGER NOT NULL,
-            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            bm_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_cid INTEGER NOT NULL,
+            job_id INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(user_cid, job_id),
             FOREIGN KEY(user_cid) REFERENCES users(chat_id) ON DELETE CASCADE,
-            FOREIGN KEY(job_id)   REFERENCES jobs(job_id) ON DELETE CASCADE
+            FOREIGN KEY(job_id) REFERENCES jobs(job_id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS notifications (
-            notif_id    INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_cid    INTEGER NOT NULL,
-            text        TEXT NOT NULL,
-            is_read     INTEGER DEFAULT 0,
-            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            notif_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_cid INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            is_read INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(user_cid) REFERENCES users(chat_id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS admin_logs (
-            log_id      INTEGER PRIMARY KEY AUTOINCREMENT,
-            admin_cid   INTEGER NOT NULL,
-            action      TEXT NOT NULL,
-            target_id   INTEGER,
-            note        TEXT,
-            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            admin_cid INTEGER NOT NULL,
+            action TEXT NOT NULL,
+            target_id INTEGER,
+            note TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
         CREATE TABLE IF NOT EXISTS activity_logs (
-            log_id      INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_cid    INTEGER NOT NULL,
-            action      TEXT NOT NULL,
-            detail      TEXT,
-            result      TEXT,
-            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_cid INTEGER NOT NULL,
+            action TEXT NOT NULL,
+            detail TEXT,
+            result TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(user_cid) REFERENCES users(chat_id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS direct_messages (
-            msg_id      INTEGER PRIMARY KEY AUTOINCREMENT,
-            from_cid    INTEGER NOT NULL,
-            to_cid      INTEGER NOT NULL,
-            job_id      INTEGER,
-            text        TEXT NOT NULL,
-            is_read     INTEGER DEFAULT 0,
-            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            msg_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            from_cid INTEGER NOT NULL,
+            to_cid INTEGER NOT NULL,
+            job_id INTEGER,
+            text TEXT NOT NULL,
+            is_read INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
-        CREATE INDEX IF NOT EXISTS idx_jobs_cat     ON jobs(category, status);
-        CREATE INDEX IF NOT EXISTS idx_jobs_prov    ON jobs(province, status);
-        CREATE INDEX IF NOT EXISTS idx_jobs_emp     ON jobs(emp_cid);
-        CREATE INDEX IF NOT EXISTS idx_jobs_expiry  ON jobs(expiry_date, status);
-        CREATE INDEX IF NOT EXISTS idx_apps_job     ON applications(job_id);
-        CREATE INDEX IF NOT EXISTS idx_apps_seeker  ON applications(seeker_cid);
-        CREATE INDEX IF NOT EXISTS idx_apps_status  ON applications(status);
-        CREATE INDEX IF NOT EXISTS idx_users_role   ON users(role);
-        CREATE INDEX IF NOT EXISTS idx_states       ON user_states(chat_id);
-        CREATE INDEX IF NOT EXISTS idx_notif_user   ON notifications(user_cid, is_read);
-        CREATE INDEX IF NOT EXISTS idx_bookmarks    ON bookmarks(user_cid);
+        CREATE INDEX IF NOT EXISTS idx_jobs_cat ON jobs(category, status);
+        CREATE INDEX IF NOT EXISTS idx_jobs_prov ON jobs(province, status);
+        CREATE INDEX IF NOT EXISTS idx_jobs_emp ON jobs(emp_cid);
+        CREATE INDEX IF NOT EXISTS idx_jobs_expiry ON jobs(expiry_date, status);
+        CREATE INDEX IF NOT EXISTS idx_apps_job ON applications(job_id);
+        CREATE INDEX IF NOT EXISTS idx_apps_seeker ON applications(seeker_cid);
+        CREATE INDEX IF NOT EXISTS idx_apps_status ON applications(status);
+        CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+        CREATE INDEX IF NOT EXISTS idx_states ON user_states(chat_id);
+        CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_cid, is_read);
+        CREATE INDEX IF NOT EXISTS idx_bookmarks ON bookmarks(user_cid);
         CREATE INDEX IF NOT EXISTS idx_activity_user ON activity_logs(user_cid);
-        CREATE INDEX IF NOT EXISTS idx_dm_from      ON direct_messages(from_cid);
-        CREATE INDEX IF NOT EXISTS idx_dm_to        ON direct_messages(to_cid);
+        CREATE INDEX IF NOT EXISTS idx_dm_from ON direct_messages(from_cid);
+        CREATE INDEX IF NOT EXISTS idx_dm_to ON direct_messages(to_cid);
         """)
         c.commit()
         c.close()
 
-# ══════════════════════════════════════════════════════════════════════════
-# State
-# ══════════════════════════════════════════════════════════════════════════
 def get_state(cid):
     with _lock:
         c = _c()
         row = c.execute("SELECT state, data FROM user_states WHERE chat_id=?", (cid,)).fetchone()
         c.close()
     if row:
-        try:    return row[0], json.loads(row[1])
-        except: return row[0], {}
+        try:
+            return row[0], json.loads(row[1])
+        except:
+            return row[0], {}
     return "IDLE", {}
 
 def set_state(cid, state, data=None):
-    if data is None: data = {}
+    if data is None:
+        data = {}
     with _lock:
         c = _c()
         c.execute(
-            "INSERT OR REPLACE INTO user_states(chat_id,state,data,updated_at) "
-            "VALUES(?,?,?,CURRENT_TIMESTAMP)",
+            "INSERT OR REPLACE INTO user_states(chat_id,state,data,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP)",
             (cid, state, json.dumps(data, ensure_ascii=False))
         )
-        c.commit(); c.close()
-
-def update_data(cid, **kv):
-    state, data = get_state(cid)
-    data.update(kv)
-    set_state(cid, state, data)
+        c.commit()
+        c.close()
 
 def clear_state(cid):
     with _lock:
         c = _c()
         c.execute("DELETE FROM user_states WHERE chat_id=?", (cid,))
-        c.commit(); c.close()
+        c.commit()
+        c.close()
 
-# ══════════════════════════════════════════════════════════════════════════
-# کاربران
-# ══════════════════════════════════════════════════════════════════════════
 def get_user(cid):
     with _lock:
         c = _c()
@@ -311,7 +301,8 @@ def get_user_by_phone(phone, role=None):
     return row
 
 def upsert_user(cid, **f):
-    if not f: return
+    if not f:
+        return
     f["last_active"] = datetime.now().isoformat()
     with _lock:
         c = _c()
@@ -323,7 +314,7 @@ def upsert_user(cid, **f):
             f["chat_id"] = cid
             f.setdefault("reg_date", shamsi_now())
             cols = ", ".join(f.keys())
-            phs  = ", ".join("?" * len(f))
+            phs = ", ".join("?" * len(f))
             c.execute(f"INSERT INTO users ({cols}) VALUES ({phs})", list(f.values()))
         c.commit()
         c.close()
@@ -352,8 +343,7 @@ def get_users_by_category(category):
     with _lock:
         c = _c()
         rows = c.execute(
-            "SELECT chat_id FROM users WHERE role='job_seeker' AND is_banned=0 "
-            "AND private_mode=0 AND allow_employer_notify=1 AND js_categories LIKE ?",
+            "SELECT chat_id FROM users WHERE role='job_seeker' AND is_banned=0 AND private_mode=0 AND allow_employer_notify=1 AND js_categories LIKE ?",
             (f'%"{category}"%',)
         ).fetchall()
         c.close()
@@ -363,8 +353,7 @@ def get_matching_seekers_for_job(category, province, city=None):
     with _lock:
         c = _c()
         sql = """SELECT chat_id FROM users 
-                 WHERE role='job_seeker' AND is_banned=0 AND private_mode=0
-                 AND allow_employer_notify=1
+                 WHERE role='job_seeker' AND is_banned=0 AND private_mode=0 AND allow_employer_notify=1
                  AND js_categories LIKE ?
                  AND (js_province = ? OR js_cities LIKE ?)"""
         params = [f'%"{category}"%', province, f'%"{province}"%']
@@ -393,9 +382,6 @@ def get_matching_employers_for_seeker(category, province, cities):
         c.close()
         return [r["emp_cid"] for r in rows]
 
-# ══════════════════════════════════════════════════════════════════════════
-# آگهی‌ها
-# ══════════════════════════════════════════════════════════════════════════
 def create_job(emp_cid, **f):
     f.update(
         emp_cid=emp_cid,
@@ -407,7 +393,7 @@ def create_job(emp_cid, **f):
     with _lock:
         c = _c()
         cols = ", ".join(f.keys())
-        phs  = ", ".join("?" * len(f))
+        phs = ", ".join("?" * len(f))
         cur = c.execute(f"INSERT INTO jobs ({cols}) VALUES ({phs})", list(f.values()))
         jid = cur.lastrowid
         c.commit()
@@ -435,9 +421,9 @@ def get_employer_jobs(emp_cid, page=0, per=10):
 def get_pending_jobs(category=None):
     with _lock:
         c = _c()
-        sql = ("SELECT j.*, u.emp_company, u.emp_name FROM jobs j "
-               "JOIN users u ON j.emp_cid=u.chat_id "
-               "WHERE j.status='pending' AND j.admin_approved=0")
+        sql = """SELECT j.*, u.emp_company, u.emp_name FROM jobs j 
+                 JOIN users u ON j.emp_cid=u.chat_id 
+                 WHERE j.status='pending' AND j.admin_approved=0"""
         params = []
         if category:
             sql += " AND j.category=?"
@@ -473,10 +459,8 @@ def reject_job(jid, admin_cid, reason=""):
         c.close()
 
 def update_job_by_admin(jid, admin_cid, **fields):
-    """ویرایش آگهی توسط ادمین قبل از تأیید"""
     with _lock:
         c = _c()
-        # فقط آگهی‌های pending قابل ویرایش هستند
         job = c.execute("SELECT status FROM jobs WHERE job_id=?", (jid,)).fetchone()
         if not job or job["status"] != "pending":
             c.close()
@@ -491,31 +475,27 @@ def update_job_by_admin(jid, admin_cid, **fields):
         c.close()
         return True
 
-def close_job(jid):
+def update_job(job_id, emp_cid, **fields):
     with _lock:
         c = _c()
-        c.execute("UPDATE jobs SET status='closed' WHERE job_id=?", (jid,))
+        ex = c.execute("SELECT 1 FROM jobs WHERE job_id=? AND emp_cid=?", (job_id, emp_cid)).fetchone()
+        if not ex:
+            c.close()
+            return False
+        sets = ", ".join(f"{k}=?" for k in fields)
+        c.execute(f"UPDATE jobs SET {sets} WHERE job_id=?", list(fields.values()) + [job_id])
         c.commit()
         c.close()
+        return True
 
-def expire_old_jobs():
+def delete_job(job_id, emp_cid):
     with _lock:
         c = _c()
-        c.execute(
-            "UPDATE jobs SET status='expired' WHERE status='active' AND expiry_date < CURRENT_TIMESTAMP"
-        )
-        c.commit()
-        c.close()
-
-def increment_views(jid):
-    with _lock:
-        c = _c()
-        c.execute("UPDATE jobs SET views=views+1 WHERE job_id=?", (jid,))
+        c.execute("DELETE FROM jobs WHERE job_id=? AND emp_cid=?", (job_id, emp_cid))
         c.commit()
         c.close()
 
 def search_jobs(category=None, province=None, page=0, per=10):
-    expire_old_jobs()
     with _lock:
         c = _c()
         sql = "SELECT * FROM jobs WHERE status='active' AND admin_approved=1"
@@ -554,18 +534,12 @@ def search_seekers(category=None, province=None, experience=None, page=0, per=10
         c.close()
     return rows, total
 
-# ══════════════════════════════════════════════════════════════════════════
-# درخواست‌های رزومه
-# ══════════════════════════════════════════════════════════════════════════
-def create_application(job_id, seeker_cid, cover_letter=None,
-                       resume_file=None, resume_type=None, file_size=0):
+def create_application(job_id, seeker_cid, cover_letter=None, resume_file=None, resume_type=None, file_size=0):
     with _lock:
         c = _c()
         try:
             cur = c.execute(
-                "INSERT INTO applications "
-                "(job_id, seeker_cid, cover_letter, resume_file, resume_type, file_size, sent_date) "
-                "VALUES(?,?,?,?,?,?,?)",
+                "INSERT INTO applications (job_id, seeker_cid, cover_letter, resume_file, resume_type, file_size, sent_date) VALUES(?,?,?,?,?,?,?)",
                 (job_id, seeker_cid, cover_letter, resume_file, resume_type, file_size, shamsi_dt())
             )
             aid = cur.lastrowid
@@ -584,11 +558,7 @@ def get_application(aid):
     with _lock:
         c = _c()
         row = c.execute(
-            "SELECT a.*, u.js_name, u.js_phone, u.js_province, u.js_experience, "
-            "u.js_education, u.js_categories, u.js_skills, u.rating, u.js_about, "
-            "u.work_experience, j.title, j.category, j.emp_cid FROM applications a "
-            "JOIN users u ON a.seeker_cid=u.chat_id "
-            "JOIN jobs j ON a.job_id=j.job_id WHERE a.app_id=?",
+            "SELECT a.*, u.js_name, u.js_phone, u.js_province, u.js_experience, u.js_education, u.js_categories, u.js_skills, u.rating, u.js_about, u.work_experience, j.title, j.category, j.emp_cid FROM applications a JOIN users u ON a.seeker_cid=u.chat_id JOIN jobs j ON a.job_id=j.job_id WHERE a.app_id=?",
             (aid,)
         ).fetchone()
         c.close()
@@ -597,11 +567,7 @@ def get_application(aid):
 def get_pending_applications(category=None):
     with _lock:
         c = _c()
-        sql = ("SELECT a.*, u.js_name, u.js_phone, u.js_experience, u.rating, "
-               "u.work_experience, j.title, j.category, j.emp_cid FROM applications a "
-               "JOIN users u ON a.seeker_cid=u.chat_id "
-               "JOIN jobs j ON a.job_id=j.job_id "
-               "WHERE a.status='pending_admin'")
+        sql = "SELECT a.*, u.js_name, u.js_phone, u.js_experience, u.rating, u.work_experience, j.title, j.category, j.emp_cid FROM applications a JOIN users u ON a.seeker_cid=u.chat_id JOIN jobs j ON a.job_id=j.job_id WHERE a.status='pending_admin'"
         params = []
         if category:
             sql += " AND j.category=?"
@@ -615,9 +581,7 @@ def get_job_applications(job_id):
     with _lock:
         c = _c()
         rows = c.execute(
-            "SELECT a.*, u.js_name, u.js_phone, u.js_experience, u.rating, u.work_experience "
-            "FROM applications a JOIN users u ON a.seeker_cid=u.chat_id "
-            "WHERE a.job_id=? ORDER BY a.created_at DESC",
+            "SELECT a.*, u.js_name, u.js_phone, u.js_experience, u.rating, u.work_experience FROM applications a JOIN users u ON a.seeker_cid=u.chat_id WHERE a.job_id=? ORDER BY a.created_at DESC",
             (job_id,)
         ).fetchall()
         c.close()
@@ -627,9 +591,7 @@ def get_seeker_applications(seeker_cid):
     with _lock:
         c = _c()
         rows = c.execute(
-            "SELECT a.*, j.title, j.category, j.province FROM applications a "
-            "JOIN jobs j ON a.job_id=j.job_id "
-            "WHERE a.seeker_cid=? ORDER BY a.created_at DESC LIMIT 50",
+            "SELECT a.*, j.title, j.category, j.province FROM applications a JOIN jobs j ON a.job_id=j.job_id WHERE a.seeker_cid=? ORDER BY a.created_at DESC LIMIT 50",
             (seeker_cid,)
         ).fetchall()
         c.close()
@@ -658,7 +620,6 @@ def reject_application(aid, admin_cid, reason=""):
         c.close()
 
 def update_application_by_admin(aid, admin_cid, **fields):
-    """ویرایش رزومه توسط ادمین قبل از تأیید"""
     with _lock:
         c = _c()
         app = c.execute("SELECT status FROM applications WHERE app_id=?", (aid,)).fetchone()
@@ -678,16 +639,10 @@ def update_application_by_admin(aid, admin_cid, **fields):
 def has_applied(job_id, seeker_cid):
     with _lock:
         c = _c()
-        row = c.execute(
-            "SELECT 1 FROM applications WHERE job_id=? AND seeker_cid=?",
-            (job_id, seeker_cid)
-        ).fetchone()
+        row = c.execute("SELECT 1 FROM applications WHERE job_id=? AND seeker_cid=?", (job_id, seeker_cid)).fetchone()
         c.close()
     return bool(row)
 
-# ══════════════════════════════════════════════════════════════════════════
-# بوکمارک
-# ══════════════════════════════════════════════════════════════════════════
 def add_bookmark(user_cid, job_id):
     with _lock:
         c = _c()
@@ -711,8 +666,7 @@ def get_bookmarks(user_cid):
     with _lock:
         c = _c()
         rows = c.execute(
-            "SELECT j.* FROM bookmarks b JOIN jobs j ON b.job_id=j.job_id "
-            "WHERE b.user_cid=? ORDER BY b.created_at DESC LIMIT 20",
+            "SELECT j.* FROM bookmarks b JOIN jobs j ON b.job_id=j.job_id WHERE b.user_cid=? ORDER BY b.created_at DESC LIMIT 20",
             (user_cid,)
         ).fetchall()
         c.close()
@@ -725,16 +679,12 @@ def is_bookmarked(user_cid, job_id):
         c.close()
     return bool(row)
 
-# ══════════════════════════════════════════════════════════════════════════
-# امتیاز
-# ══════════════════════════════════════════════════════════════════════════
 def add_rating(from_cid, to_cid, job_id, score, comment=""):
     with _lock:
         c = _c()
         try:
             c.execute(
-                "INSERT OR REPLACE INTO ratings(from_cid, to_cid, job_id, score, comment) "
-                "VALUES(?,?,?,?,?)",
+                "INSERT OR REPLACE INTO ratings(from_cid, to_cid, job_id, score, comment) VALUES(?,?,?,?,?)",
                 (from_cid, to_cid, job_id, score, comment)
             )
             avg = c.execute("SELECT AVG(score), COUNT(*) FROM ratings WHERE to_cid=?", (to_cid,)).fetchone()
@@ -748,9 +698,6 @@ def add_rating(from_cid, to_cid, job_id, score, comment=""):
             c.close()
             return False
 
-# ══════════════════════════════════════════════════════════════════════════
-# اعلان
-# ══════════════════════════════════════════════════════════════════════════
 def add_notification(user_cid, text):
     with _lock:
         c = _c()
@@ -777,9 +724,6 @@ def get_notifications(user_cid):
         c.close()
     return rows
 
-# ══════════════════════════════════════════════════════════════════════════
-# آمار
-# ══════════════════════════════════════════════════════════════════════════
 def get_stats():
     with _lock:
         c = _c()
@@ -800,16 +744,12 @@ def get_stats():
             "bookmarks": q("SELECT COUNT(*) FROM bookmarks"),
         }
         cats = c.execute(
-            "SELECT category, COUNT(*) as n FROM jobs WHERE status='active' "
-            "GROUP BY category ORDER BY n DESC LIMIT 5"
+            "SELECT category, COUNT(*) as n FROM jobs WHERE status='active' GROUP BY category ORDER BY n DESC LIMIT 5"
         ).fetchall()
         stats["top_cats"] = [(r["category"], r["n"]) for r in cats]
         c.close()
     return stats
 
-# ══════════════════════════════════════════════════════════════════════════
-# لاگ‌های ادمین
-# ══════════════════════════════════════════════════════════════════════════
 def get_admin_logs(limit=20):
     with _lock:
         c = _c()
@@ -817,9 +757,6 @@ def get_admin_logs(limit=20):
         c.close()
     return rows
 
-# ══════════════════════════════════════════════════════════════════════════
-# تاریخچه فعالیت (با نتیجه)
-# ══════════════════════════════════════════════════════════════════════════
 def add_activity_log(user_cid, action, detail="", result=""):
     with _lock:
         c = _c()
@@ -840,9 +777,6 @@ def get_activity_log(user_cid, limit=30):
         c.close()
     return rows
 
-# ══════════════════════════════════════════════════════════════════════════
-# پیام مستقیم
-# ══════════════════════════════════════════════════════════════════════════
 def save_direct_message(from_cid, to_cid, job_id, text):
     with _lock:
         c = _c()
@@ -853,32 +787,6 @@ def save_direct_message(from_cid, to_cid, job_id, text):
         c.commit()
         c.close()
 
-# ══════════════════════════════════════════════════════════════════════════
-# ویرایش آگهی (توسط کاربر)
-# ══════════════════════════════════════════════════════════════════════════
-def update_job(job_id, emp_cid, **fields):
-    with _lock:
-        c = _c()
-        ex = c.execute("SELECT 1 FROM jobs WHERE job_id=? AND emp_cid=?", (job_id, emp_cid)).fetchone()
-        if not ex:
-            c.close()
-            return False
-        sets = ", ".join(f"{k}=?" for k in fields)
-        c.execute(f"UPDATE jobs SET {sets} WHERE job_id=?", list(fields.values()) + [job_id])
-        c.commit()
-        c.close()
-        return True
-
-def delete_job(job_id, emp_cid):
-    with _lock:
-        c = _c()
-        c.execute("DELETE FROM jobs WHERE job_id=? AND emp_cid=?", (job_id, emp_cid))
-        c.commit()
-        c.close()
-
-# ══════════════════════════════════════════════════════════════════════════
-# Helpers
-# ══════════════════════════════════════════════════════════════════════════
 def fmt_salary(mn, mx=None):
     def _f(n):
         if not n or n == 0:
@@ -919,9 +827,6 @@ def jlist(text):
     except:
         return []
 
-# ══════════════════════════════════════════════════════════════════════════
-# تطابق هوشمند
-# ══════════════════════════════════════════════════════════════════════════
 def match_score(seeker, job) -> int:
     score = 0
     cats = jlist(seeker["js_categories"])
@@ -969,15 +874,13 @@ def match_score(seeker, job) -> int:
     return min(score, 100)
 
 def get_matched_jobs(seeker_cid, limit=10):
-    expire_old_jobs()
     seeker = get_user(seeker_cid)
     if not seeker:
         return []
     with _lock:
         c = _c()
         jobs = c.execute(
-            "SELECT * FROM jobs WHERE status='active' AND admin_approved=1 "
-            "ORDER BY created_at DESC LIMIT 100"
+            "SELECT * FROM jobs WHERE status='active' AND admin_approved=1 ORDER BY created_at DESC LIMIT 100"
         ).fetchall()
         c.close()
     scored = []
@@ -995,8 +898,7 @@ def get_matched_seekers(job_id, limit=10):
     with _lock:
         c = _c()
         seekers = c.execute(
-            "SELECT * FROM users WHERE role='job_seeker' "
-            "AND is_banned=0 AND private_mode=0 LIMIT 500"
+            "SELECT * FROM users WHERE role='job_seeker' AND is_banned=0 AND private_mode=0 LIMIT 500"
         ).fetchall()
         c.close()
     scored = []
