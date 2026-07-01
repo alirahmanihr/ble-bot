@@ -220,3 +220,27 @@ def match_score(seeker, job):
     ...
 
 print("✅ database.py کامل بارگذاری شد")
+
+# Helpers (در انتهای database.py)
+def parse_int(text):
+    """تبدیل متن به عدد"""
+    if not text: return 0
+    m = re.search(r'\d+', str(text).replace(",", "").replace("،", "").replace("٬", ""))
+    return int(m.group()) if m else 0
+
+def fmt_salary(mn, mx=None):
+    def _f(n):
+        if not n or n == 0: return None
+        try:
+            s = str(int(n))
+            return ",".join([s[max(0,i-3):i] for i in range(len(s),0,-3)][::-1])
+        except: return None
+    a = _f(mn); b = _f(mx)
+    if a and b: return f"{a} — {b} تومان"
+    if a: return f"{a} تومان"
+    return "توافقی"
+
+# در انتهای فایل
+if __name__ == "__main__":
+    print("✅ database.py بارگذاری شد")
+    
