@@ -1,6 +1,6 @@
 """
 ربات کاریابی همراکار - نسخه تولیدی نهایی
-پس از ۹ مرحله تست عمیق و رفع تمام خطاها
+پس از ۱۸ مرحله تست و رفع تمام خطاها
 """
 
 import asyncio
@@ -461,12 +461,13 @@ async def handle_state(s, cid, state, data, text, doc, photos):
         if jid:
             db.reject_job(jid, cid, text)
             job = db.get_job(jid)
-            add_activity_log(job["emp_cid"], "نتیجه آگهی", job["title"], "رد شد")
-            try:
-                await api.send_message(s, job["emp_cid"],
-                    f"❌ *آگهی رد شد*\n\n💼 {job['title']}\n\n📝 دلیل: {text}")
-            except:
-                pass
+            if job:
+                add_activity_log(job["emp_cid"], "نتیجه آگهی", job["title"], "رد شد")
+                try:
+                    await api.send_message(s, job["emp_cid"],
+                        f"❌ *آگهی رد شد*\n\n💼 {job['title']}\n\n📝 دلیل: {text}")
+                except:
+                    pass
         db.clear_state(cid)
         await api.send_message(s, cid, "✅ آگهی رد شد")
         await adm_jobs(s, cid)
@@ -475,13 +476,14 @@ async def handle_state(s, cid, state, data, text, doc, photos):
         aid = data.get("reject_app_id")
         if aid:
             app = db.get_application(aid)
-            db.reject_application(aid, cid, text)
-            add_activity_log(app["seeker_cid"], "نتیجه رزومه", app["title"], f"رد شد: {text}")
-            try:
-                await api.send_message(s, app["seeker_cid"],
-                    f"❌ *رزومه رد شد*\n\n💼 {app['title']}\n\n📝 دلیل: {text}")
-            except:
-                pass
+            if app:
+                db.reject_application(aid, cid, text)
+                add_activity_log(app["seeker_cid"], "نتیجه رزومه", app["title"], f"رد شد: {text}")
+                try:
+                    await api.send_message(s, app["seeker_cid"],
+                        f"❌ *رزومه رد شد*\n\n💼 {app['title']}\n\n📝 دلیل: {text}")
+                except:
+                    pass
         db.clear_state(cid)
         await api.send_message(s, cid, "✅ رزومه رد شد")
         await adm_apps(s, cid)
@@ -984,28 +986,30 @@ async def on_cb(s, cb):
         jid = int(d.split(":")[1])
         db.approve_job(jid, cid)
         job = db.get_job(jid)
-        add_activity_log(job["emp_cid"], "نتیجه آگهی", job["title"], "تأیید شد")
-        await api.send_message(s, cid, f"✅ آگهی *{job['title']}* تأیید شد")
-        try:
-            hashtag = f"#{job['category'].replace(' ', '')}"
-            msg_to_emp = f"✅ *آگهی تأیید شد!*\n\n💼 {job['title']}\n\n{SLOGAN_EMP}\n\n{hashtag}"
-            await api.send_message(s, job["emp_cid"], msg_to_emp)
-            channel_text = (
-                f"📢 *آگهی جدید*\n\n"
-                f"💼 {job['title']}\n"
-                f"🏷 {job['category']}\n"
-                f"💰 {fmt_salary(job['salary_min'], job['salary_max'])}\n"
-                f"🗺 {job['province'] or '—'}\n"
-                f"🤝 {job['emp_type'] or '—'}\n"
-                f"📅 {job['post_date']}\n\n"
-                f"{hashtag}"
-            )
-            await api.send_message(s, CHANNEL_1, channel_text)
-            await api.send_message(s, CHANNEL_2, channel_text)
-        except Exception as e:
-            log.error(f"انتشار در کانال: {e}")
-        asyncio.create_task(_notify_seekers_job(s, dict(job)))
-        await adm_jobs(s, cid)
+        if job:
+            add_activity_log(job["emp_cid"], "نتیجه آگهی", job["title"], "تأیید شد")
+            await api.send_message(s, cid, f"✅ آگهی *{job['title']}* تأیید شد")
+            try:
+                hashtag = f"#{job['category'].replace(' ', '')}"
+                msg_to_emp = f"✅ *آگهی تأیید شد!*\n\n💼 {job['title']}\n\n{SLOGAN_EMP}\n\n{hashtag}"
+                await api.send_message(s, job["emp_cid"], msg_to_emp)
+                channel_text = (
+                    f"📢 *آگهی جدید*\n\n"
+                    f"💼 {job['title']}\n"
+                    f"🏷 {job['category']}\n"
+                    f"💰 {fmt_salary(job['salary_min'], job['salary_max'])}\n"
+                    f"🗺 {job['province'] or '—'}\n"
+                    f"🤝 {job['emp_type'] or '—'}\n"
+                    f"📅 {job['post_date']}\n\n"
+                    f"{hashtag}"
+                )
+                await api.send_message(s, CHANNEL_1, channel_text)
+                await api.send_message(s, CHANNEL_2, channel_text)
+            except Exception as e:
+                log.error(f"انتشار در کانال: {e}")
+            if job:
+                asyncio.create_task(_notify_seekers_job(s, dict(job)))
+            await adm_jobs(s, cid)
         return
 
     if d.startswith("admreject:"):
@@ -1038,46 +1042,48 @@ async def on_cb(s, cb):
             note = parts[2] if len(parts) > 2 else ""
             db.approve_application(aid, cid, note)
             app = db.get_application(aid)
-            add_activity_log(app["seeker_cid"], "نتیجه رزومه", app["title"], "تأیید شد")
-            await api.send_message(s, cid, f"✅ رزومه تأیید شد")
-            try:
-                await api.send_message(s, app["seeker_cid"],
-                    f"✅ *{THANKS}*\n\n"
-                    f"رزومه شما برای آگهی *{app['title']}* تأیید شد!\n"
-                    f"📝 نظر ادمین: {note if note else 'بدون نظر'}")
-                seeker = db.get_user(app["seeker_cid"])
-                cats = jlist(seeker["js_categories"])
-                skills = jlist(seeker["js_skills"])
-                exp_list = jlist(seeker.get("work_experience", "[]"))
-                exp_text = ""
-                if exp_list:
-                    exp_text = "\n📋 سوابق کاری:\n"
-                    for exp in exp_list[:3]:
-                        exp_text += f"• {exp.get('place', '—')} ({exp.get('duration', '—')}) - {exp.get('role', '—')}\n"
-                emp_text = (
-                    f"📬 *رزومه جدید دریافت شد!*\n\n"
-                    f"💼 آگهی: {app['title']}\n\n"
-                    f"👤 {seeker['js_name']}\n"
-                    f"📞 {seeker['js_phone']}\n"
-                    f"🗺 {seeker['js_province'] or '—'}\n"
-                    f"📆 {seeker['js_experience'] or '—'}\n"
-                    f"🎓 {seeker['js_education'] or '—'}\n"
-                    f"💰 {fmt_salary(seeker['js_salary_min'])}\n"
-                    f"🏷 {', '.join(cats) or '—'}\n"
-                    f"🛠 {', '.join(skills[:5]) or '—'}\n"
-                    f"{exp_text}"
-                    f"⭐ {stars(seeker['rating'], seeker['rating_count'])}"
-                )
-                if app.get("cover_letter"):
-                    emp_text += f"\n\n📝 معرفی: {app['cover_letter']}"
-                await api.send_message(s, app["emp_cid"], emp_text,
-                    inline([
-                        [("👤 پروفایل کامل", f"viewseeker:{app['seeker_cid']}")],
-                        [("⭐ امتیاز دهید", f"rate_seeker:{app['seeker_cid']}:{app['job_id']}")]
-                    ]))
-            except Exception as e:
-                log.error(f"admapp send: {e}")
-            await adm_apps(s, cid)
+            if app:
+                add_activity_log(app["seeker_cid"], "نتیجه رزومه", app["title"], "تأیید شد")
+                await api.send_message(s, cid, f"✅ رزومه تأیید شد")
+                try:
+                    await api.send_message(s, app["seeker_cid"],
+                        f"✅ *{THANKS}*\n\n"
+                        f"رزومه شما برای آگهی *{app['title']}* تأیید شد!\n"
+                        f"📝 نظر ادمین: {note if note else 'بدون نظر'}")
+                    seeker = db.get_user(app["seeker_cid"])
+                    if seeker:
+                        cats = jlist(seeker["js_categories"])
+                        skills = jlist(seeker["js_skills"])
+                        exp_list = jlist(seeker.get("work_experience", "[]"))
+                        exp_text = ""
+                        if exp_list:
+                            exp_text = "\n📋 سوابق کاری:\n"
+                            for exp in exp_list[:3]:
+                                exp_text += f"• {exp.get('place', '—')} ({exp.get('duration', '—')}) - {exp.get('role', '—')}\n"
+                        emp_text = (
+                            f"📬 *رزومه جدید دریافت شد!*\n\n"
+                            f"💼 آگهی: {app['title']}\n\n"
+                            f"👤 {seeker['js_name']}\n"
+                            f"📞 {seeker['js_phone']}\n"
+                            f"🗺 {seeker['js_province'] or '—'}\n"
+                            f"📆 {seeker['js_experience'] or '—'}\n"
+                            f"🎓 {seeker['js_education'] or '—'}\n"
+                            f"💰 {fmt_salary(seeker['js_salary_min'])}\n"
+                            f"🏷 {', '.join(cats) or '—'}\n"
+                            f"🛠 {', '.join(skills[:5]) or '—'}\n"
+                            f"{exp_text}"
+                            f"⭐ {stars(seeker['rating'], seeker['rating_count'])}"
+                        )
+                        if app.get("cover_letter"):
+                            emp_text += f"\n\n📝 معرفی: {app['cover_letter']}"
+                        await api.send_message(s, app["emp_cid"], emp_text,
+                            inline([
+                                [("👤 پروفایل کامل", f"viewseeker:{app['seeker_cid']}")],
+                                [("⭐ امتیاز دهید", f"rate_seeker:{app['seeker_cid']}:{app['job_id']}")]
+                            ]))
+                except Exception as e:
+                    log.error(f"admapp send: {e}")
+                await adm_apps(s, cid)
         return
 
     if d.startswith("admrejectapp:"):
@@ -1212,19 +1218,20 @@ async def on_cb(s, cb):
             jid = int(parts[1])
             job = db.get_job(jid)
             if job and job["status"] == "active" and job["admin_approved"]:
+                job_dict = dict(job)
                 bot_username = BOT_NAME.replace(' ', '_')
                 share_link = f"https://t.me/{bot_username}?start=job_{jid}"
-                days = db.days_since(job.get("post_date")) if job.get("post_date") else 0
+                days = db.days_since(job_dict.get("post_date")) if job_dict.get("post_date") else 0
                 days_text = f"({days} روز پیش)" if days > 0 else "(امروز)"
                 await api.send_message(s, cid,
                     f"🔗 *اشتراک‌گذاری آگهی*\n\n"
-                    f"💼 {job['title']}\n"
-                    f"🏷 {job['category']}\n"
-                    f"💰 {fmt_salary(job['salary_min'], job['salary_max'])}\n"
-                    f"🗺 {job['province'] or '—'} | {job['city'] or '—'}\n"
-                    f"🤝 {job['emp_type'] or '—'}\n"
-                    f"📅 تاریخ ثبت: {job['post_date']} {days_text}\n"
-                    f"📝 {job['description'] or '—'}\n\n"
+                    f"💼 {job_dict.get('title')}\n"
+                    f"🏷 {job_dict.get('category')}\n"
+                    f"💰 {fmt_salary(job_dict.get('salary_min'), job_dict.get('salary_max'))}\n"
+                    f"🗺 {job_dict.get('province') or '—'} | {job_dict.get('city') or '—'}\n"
+                    f"🤝 {job_dict.get('emp_type') or '—'}\n"
+                    f"📅 تاریخ ثبت: {job_dict.get('post_date')} {days_text}\n"
+                    f"📝 {job_dict.get('description') or '—'}\n\n"
                     f"🔗 لینک آگهی:\n{share_link}\n\n"
                     f"📣 کانال‌های ما:\n{CHANNEL_1}\n{CHANNEL_2}\n\n"
                     f"📋 این لینک را کپی کرده و برای دیگران ارسال کنید.")
@@ -1472,15 +1479,16 @@ async def handle_extended_cb(s, cid, d, mid, cbid, state, data):
             "seen": "👁 دیده شده"
         }
         for app in apps:
-            exp_list = jlist(app.get("work_experience", "[]"))
+            app_dict = dict(app)
+            exp_list = jlist(app_dict.get("work_experience", "[]"))
             exp_text = f"\n📋 {len(exp_list)} سابقه کاری" if exp_list else ""
             await api.send_message(s, cid,
-                f"👤 *{app['js_name']}*\n"
-                f"📞 {app['js_phone']}\n"
-                f"📆 {app['js_experience'] or '—'}\n"
-                f"⭐ {stars(app['rating'])}{exp_text}\n"
-                f"وضعیت: {st_map.get(app['status'], '—')}",
-                inline([[("👁 مشاهده", f"viewseeker:{app['seeker_cid']}")]]))
+                f"👤 *{app_dict.get('js_name')}*\n"
+                f"📞 {app_dict.get('js_phone')}\n"
+                f"📆 {app_dict.get('js_experience') or '—'}\n"
+                f"⭐ {stars(app_dict.get('rating'))}{exp_text}\n"
+                f"وضعیت: {st_map.get(app_dict.get('status'), '—')}",
+                inline([[("👁 مشاهده", f"viewseeker:{app_dict.get('seeker_cid')}")]]))
         return True
 
     return False
@@ -1493,21 +1501,22 @@ async def handle_extended_state(s, cid, state, data, text) -> bool:
         if to_cid and job_id:
             user = db.get_user(cid)
             job = db.get_job(job_id)
-            db.save_direct_message(cid, to_cid, job_id, text)
-            add_activity_log(cid, "پیام مستقیم", f"به کاربر {to_cid} درباره آگهی {job_id}")
-            try:
-                await api.send_message(s, to_cid,
-                    f"💬 *پیام از کارجو*\n\n"
-                    f"درباره آگهی: *{job['title']}*\n\n"
-                    f"{text}\n\n"
-                    f"👤 {user['js_name']} | 📞 {user['js_phone']}")
-            except:
-                pass
-            db.clear_state(cid)
-            await api.send_message(s, cid, "✅ پیام ارسال شد!")
-            u = db.get_user(cid)
-            if u:
-                await show_menu(s, cid, u)
+            if user and job:
+                db.save_direct_message(cid, to_cid, job_id, text)
+                add_activity_log(cid, "پیام مستقیم", f"به کاربر {to_cid} درباره آگهی {job_id}")
+                try:
+                    await api.send_message(s, to_cid,
+                        f"💬 *پیام از کارجو*\n\n"
+                        f"درباره آگهی: *{job['title']}*\n\n"
+                        f"{text}\n\n"
+                        f"👤 {user['js_name']} | 📞 {user['js_phone']}")
+                except:
+                    pass
+                db.clear_state(cid)
+                await api.send_message(s, cid, "✅ پیام ارسال شد!")
+                u = db.get_user(cid)
+                if u:
+                    await show_menu(s, cid, u)
         return True
 
     if state == EDIT_EMP_FIELD:
@@ -1868,30 +1877,31 @@ async def finalize_application(s, cid, data):
     db.clear_state(cid)
     job = db.get_job(jid)
     user = db.get_user(cid)
-    add_activity_log(cid, "ارسال رزومه", f"ارسال رزومه برای آگهی {job['title']}")
+    if job and user:
+        add_activity_log(cid, "ارسال رزومه", f"ارسال رزومه برای آگهی {job['title']}")
 
-    exp_count = len(exp_list)
-    exp_msg = f" با {exp_count} سابقه کاری" if exp_count > 0 else " بدون سابقه کاری"
-    complete_msg = " (رزومه شما برای همیشه تکمیل شد)" if resume_complete == 1 else ""
+        exp_count = len(exp_list)
+        exp_msg = f" با {exp_count} سابقه کاری" if exp_count > 0 else " بدون سابقه کاری"
+        complete_msg = " (رزومه شما برای همیشه تکمیل شد)" if resume_complete == 1 else ""
 
-    await api.send_message(s, cid,
-        f"✅ *{THANKS}*\n\n"
-        f"💼 {job['title']}\n"
-        f"📋 رزومه شما{exp_msg} با موفقیت ارسال شد.{complete_msg}\n\n"
-        f"پس از بررسی توسط کارفرما، نتیجه به شما اطلاع داده می‌شود.")
+        await api.send_message(s, cid,
+            f"✅ *{THANKS}*\n\n"
+            f"💼 {job['title']}\n"
+            f"📋 رزومه شما{exp_msg} با موفقیت ارسال شد.{complete_msg}\n\n"
+            f"پس از بررسی توسط کارفرما، نتیجه به شما اطلاع داده می‌شود.")
 
-    await notify_admins(s,
-        f"📬 *رزومه جدید*\n\n"
-        f"💼 {job['title']}\n"
-        f"👤 {user['js_name'] or '—'}\n"
-        f"📞 {user['js_phone'] or '—'}\n"
-        f"📆 {user['js_experience'] or '—'}\n"
-        f"📋 {exp_count} سابقه کاری\n"
-        f"⭐ {stars(user['rating'], user['rating_count'])}",
-        inline([
-            [("✅ تأیید", f"admapp:{aid}"), ("❌ رد", f"admrejectapp:{aid}")],
-            [("✏️ ویرایش رزومه", f"adm_edit_app:{aid}:cover_letter")]
-        ]))
+        await notify_admins(s,
+            f"📬 *رزومه جدید*\n\n"
+            f"💼 {job['title']}\n"
+            f"👤 {user['js_name'] or '—'}\n"
+            f"📞 {user['js_phone'] or '—'}\n"
+            f"📆 {user['js_experience'] or '—'}\n"
+            f"📋 {exp_count} سابقه کاری\n"
+            f"⭐ {stars(user['rating'], user['rating_count'])}",
+            inline([
+                [("✅ تأیید", f"admapp:{aid}"), ("❌ رد", f"admrejectapp:{aid}")],
+                [("✏️ ویرایش رزومه", f"adm_edit_app:{aid}:cover_letter")]
+            ]))
 
     await show_menu(s, cid, user)
 
@@ -1953,6 +1963,7 @@ async def my_jobs(s, cid, page=0):
     if not jobs:
         await api.send_message(s, cid, "📭 هنوز آگهی ثبت نکرده‌اید", menu_for(user))
         return
+    
     st_map = {
         "active": "✅ فعال",
         "pending": "⏳ انتظار",
@@ -1960,28 +1971,37 @@ async def my_jobs(s, cid, page=0):
         "expired": "⏰ منقضی",
         "closed": "🔒 بسته"
     }
+    
     for job in jobs:
-        post_date = job.get("post_date")
+        job_dict = dict(job)
+        
+        post_date = job_dict.get("post_date")
         days = db.days_since(post_date) if post_date else 0
         days_text = f"({days} روز پیش)" if days > 0 else "(امروز)"
-        approved_date = job.get("approved_date") or "در انتظار"
-        expiry_date = job.get("expiry_date") or "—"
-        share_btn = [("🔗 اشتراک‌گذاری", f"share_job:{job['job_id']}")] if job["status"] == "active" and job["admin_approved"] else []
+        approved_date = job_dict.get("approved_date") or "در انتظار"
+        expiry_date = job_dict.get("expiry_date") or "—"
+        
+        share_btn = []
+        if job_dict.get("status") == "active" and job_dict.get("admin_approved"):
+            share_btn = [("🔗 اشتراک‌گذاری", f"share_job:{job_dict['job_id']}")]
+        
         nav = []
-        if not db.is_bookmarked(cid, job["job_id"]):
-            nav.append(("🔖 ذخیره", f"bookmark:{job['job_id']}"))
-        nav.append(("📬 رزومه‌ها", f"jobreqs:{job['job_id']}"))
+        if not db.is_bookmarked(cid, job_dict["job_id"]):
+            nav.append(("🔖 ذخیره", f"bookmark:{job_dict['job_id']}"))
+        nav.append(("📬 رزومه‌ها", f"jobreqs:{job_dict['job_id']}"))
+        
         await api.send_message(s, cid,
-            f"💼 *{job['title']}*\n"
-            f"🏷 {job['category']}\n"
-            f"💰 {fmt_salary(job['salary_min'], job['salary_max'])}\n"
-            f"🗺 {job['province'] or '—'}\n"
-            f"👁 {job['views']} | 📄 {job['app_count']} درخواست\n"
-            f"{st_map.get(job['status'], '—')}\n"
+            f"💼 *{job_dict['title']}*\n"
+            f"🏷 {job_dict['category']}\n"
+            f"💰 {fmt_salary(job_dict.get('salary_min'), job_dict.get('salary_max'))}\n"
+            f"🗺 {job_dict.get('province') or '—'}\n"
+            f"👁 {job_dict.get('views')} | 📄 {job_dict.get('app_count')} درخواست\n"
+            f"{st_map.get(job_dict.get('status'), '—')}\n"
             f"📅 تاریخ ثبت: {post_date} {days_text}\n"
             f"📅 تاریخ تأیید: {approved_date}\n"
             f"📅 تاریخ انقضا: {expiry_date}",
             inline([nav + share_btn] if share_btn else [nav]))
+    
     nav = []
     if page > 0:
         nav.append((f"◀️ صفحه {page}", f"myjobs:{page-1}"))
@@ -1989,6 +2009,7 @@ async def my_jobs(s, cid, page=0):
         nav.append((f"▶️ صفحه {page+2}", f"myjobs:{page+1}"))
     if nav:
         await api.send_message(s, cid, "صفحه‌بندی:", inline([nav]))
+    
     await show_menu(s, cid, user)
 
 async def emp_received(s, cid):
@@ -1998,15 +2019,16 @@ async def emp_received(s, cid):
     jobs, _ = db.get_employer_jobs(cid)
     total_apps = 0
     for job in jobs:
-        apps = db.get_job_applications(job["job_id"])
+        job_dict = dict(job)
+        apps = db.get_job_applications(job_dict["job_id"])
         if apps:
             total_apps += len(apps)
             approved = [a for a in apps if a["status"] == "approved"]
             pending = [a for a in apps if a["status"] == "pending_admin"]
             await api.send_message(s, cid,
-                f"💼 *{job['title']}*\n"
+                f"💼 *{job_dict['title']}*\n"
                 f"📄 کل: {len(apps)} | ✅ تأیید: {len(approved)} | ⏳ انتظار: {len(pending)}",
-                inline([[("👁 مشاهده رزومه‌ها", f"jobreqs:{job['job_id']}")]]))
+                inline([[("👁 مشاهده رزومه‌ها", f"jobreqs:{job_dict['job_id']}")]]))
     if total_apps == 0:
         await api.send_message(s, cid, "📭 هنوز رزومه‌ای دریافت نشده")
     await show_menu(s, cid, user)
@@ -2033,17 +2055,18 @@ async def do_search(s, cid, data, page=0):
         return
     await api.send_message(s, cid, f"✅ *{total} آگهی یافت شد:*")
     for job in jobs:
-        bm = "🔖" if db.is_bookmarked(cid, job["job_id"]) else "🔖 ذخیره"
+        job_dict = dict(job)
+        bm = "🔖" if db.is_bookmarked(cid, job_dict["job_id"]) else "🔖 ذخیره"
         await api.send_message(s, cid,
-            f"💼 *{job['title']}*\n"
-            f"🏷 {job['category']}\n"
-            f"💰 {fmt_salary(job['salary_min'], job['salary_max'])}\n"
-            f"🗺 {job['province'] or '—'}\n"
-            f"👁 {job['views']} بازدید | 📅 {job['post_date']}",
+            f"💼 *{job_dict['title']}*\n"
+            f"🏷 {job_dict['category']}\n"
+            f"💰 {fmt_salary(job_dict.get('salary_min'), job_dict.get('salary_max'))}\n"
+            f"🗺 {job_dict.get('province') or '—'}\n"
+            f"👁 {job_dict.get('views')} بازدید | 📅 {job_dict.get('post_date')}",
             inline([
-                [("📄 ارسال رزومه", f"applyjob:{job['job_id']}"),
-                 (bm, f"bookmark:{job['job_id']}")],
-                [("🔗 اشتراک‌گذاری", f"share_job:{job['job_id']}")]
+                [("📄 ارسال رزومه", f"applyjob:{job_dict['job_id']}"),
+                 (bm, f"bookmark:{job_dict['job_id']}")],
+                [("🔗 اشتراک‌گذاری", f"share_job:{job_dict['job_id']}")]
             ]))
     await show_menu(s, cid, user)
 
@@ -2065,21 +2088,22 @@ async def do_search_seeker(s, cid, data):
         return
     await api.send_message(s, cid, f"✅ *{total} کارجو یافت شد:*")
     for sk in seekers:
-        cats = jlist(sk["js_categories"])
-        skills = jlist(sk["js_skills"])
-        name = (sk["js_name"] or "").split()[0] if sk["js_name"] else "—"
-        exp_list = jlist(sk.get("work_experience", "[]"))
+        sk_dict = dict(sk)
+        cats = jlist(sk_dict.get("js_categories"))
+        skills = jlist(sk_dict.get("js_skills"))
+        name = (sk_dict.get("js_name") or "").split()[0] if sk_dict.get("js_name") else "—"
+        exp_list = jlist(sk_dict.get("work_experience", "[]"))
         exp_text = f" | 📋 {len(exp_list)} سابقه" if exp_list else ""
         await api.send_message(s, cid,
             f"👤 *{name}*\n"
-            f"📆 {sk['js_experience'] or '—'}\n"
-            f"🎓 {sk['js_education'] or '—'}\n"
-            f"🗺 {sk['js_province'] or '—'}\n"
-            f"💰 {fmt_salary(sk['js_salary_min'])}\n"
+            f"📆 {sk_dict.get('js_experience') or '—'}\n"
+            f"🎓 {sk_dict.get('js_education') or '—'}\n"
+            f"🗺 {sk_dict.get('js_province') or '—'}\n"
+            f"💰 {fmt_salary(sk_dict.get('js_salary_min'))}\n"
             f"🏷 {', '.join(cats[:2]) or '—'}\n"
             f"🛠 {', '.join(skills[:3]) or '—'}{exp_text}\n"
-            f"⭐ {stars(sk['rating'], sk['rating_count'])}",
-            inline([[("👁 مشاهده کامل", f"viewseeker:{sk['chat_id']}")]]))
+            f"⭐ {stars(sk_dict.get('rating'), sk_dict.get('rating_count'))}",
+            inline([[("👁 مشاهده کامل", f"viewseeker:{sk_dict['chat_id']}")]]))
     await show_menu(s, cid, user)
 
 # ==================== RESUME FUNCTIONS ====================
@@ -2120,11 +2144,12 @@ async def my_apps(s, cid):
     }
     await api.send_message(s, cid, f"📊 *{len(apps)} درخواست شما:*")
     for app in apps:
+        app_dict = dict(app)
         await api.send_message(s, cid,
-            f"💼 *{app['title']}*\n"
-            f"🏷 {app['category']}\n"
-            f"{st_map.get(app['status'], '—')}\n"
-            f"📅 {app['sent_date']}")
+            f"💼 *{app_dict['title']}*\n"
+            f"🏷 {app_dict['category']}\n"
+            f"{st_map.get(app_dict['status'], '—')}\n"
+            f"📅 {app_dict['sent_date']}")
     await show_menu(s, cid, user)
 
 async def my_bookmarks(s, cid):
@@ -2137,13 +2162,14 @@ async def my_bookmarks(s, cid):
         return
     await api.send_message(s, cid, f"🔖 *{len(jobs)} آگهی ذخیره‌شده:*")
     for job in jobs:
+        job_dict = dict(job)
         await api.send_message(s, cid,
-            f"💼 *{job['title']}*\n"
-            f"🏷 {job['category']}\n"
-            f"💰 {fmt_salary(job['salary_min'], job['salary_max'])}\n"
-            f"🗺 {job['province'] or '—'}",
-            inline([[("📄 ارسال رزومه", f"applyjob:{job['job_id']}"),
-                     ("🗑 حذف", f"bookmark:{job['job_id']}")]]))
+            f"💼 *{job_dict['title']}*\n"
+            f"🏷 {job_dict['category']}\n"
+            f"💰 {fmt_salary(job_dict.get('salary_min'), job_dict.get('salary_max'))}\n"
+            f"🗺 {job_dict.get('province') or '—'}",
+            inline([[("📄 ارسال رزومه", f"applyjob:{job_dict['job_id']}"),
+                     ("🗑 حذف", f"bookmark:{job_dict['job_id']}")]]))
     await show_menu(s, cid, user)
 
 async def my_notifs(s, cid):
@@ -2202,17 +2228,18 @@ async def adm_jobs(s, cid, category=None):
         return
     await api.send_message(s, cid, f"📋 *{len(jobs)} آگهی در انتظار:*")
     for job in jobs:
+        job_dict = dict(job)
         await api.send_message(s, cid,
-            f"💼 *{job['title']}*\n"
-            f"🏭 {job['emp_company'] or '—'}\n"
-            f"🏷 {job['category']}\n"
-            f"💰 {fmt_salary(job['salary_min'], job['salary_max'])}\n"
-            f"🤝 {job['emp_type'] or '—'}\n"
-            f"🗺 {job['province'] or '—'}",
+            f"💼 *{job_dict['title']}*\n"
+            f"🏭 {job_dict.get('emp_company') or '—'}\n"
+            f"🏷 {job_dict['category']}\n"
+            f"💰 {fmt_salary(job_dict.get('salary_min'), job_dict.get('salary_max'))}\n"
+            f"🤝 {job_dict.get('emp_type') or '—'}\n"
+            f"🗺 {job_dict.get('province') or '—'}",
             inline([
-                [("✅ تأیید", f"admjob:{job['job_id']}"),
-                 ("❌ رد", f"admreject:{job['job_id']}")],
-                [("✏️ ویرایش", f"adm_edit_job:{job['job_id']}:title")]
+                [("✅ تأیید", f"admjob:{job_dict['job_id']}"),
+                 ("❌ رد", f"admreject:{job_dict['job_id']}")],
+                [("✏️ ویرایش", f"adm_edit_job:{job_dict['job_id']}:title")]
             ]))
 
 async def adm_apps(s, cid, category=None):
@@ -2224,19 +2251,20 @@ async def adm_apps(s, cid, category=None):
         return
     await api.send_message(s, cid, f"📬 *{len(apps)} رزومه در انتظار:*")
     for app in apps:
-        exp_list = jlist(app.get("work_experience", "[]"))
+        app_dict = dict(app)
+        exp_list = jlist(app_dict.get("work_experience", "[]"))
         exp_text = f"📋 {len(exp_list)} سابقه کاری" if exp_list else "بدون سابقه"
         await api.send_message(s, cid,
-            f"👤 *{app['js_name']}*\n"
-            f"📞 {app['js_phone']}\n"
-            f"📆 {app['js_experience'] or '—'}\n"
-            f"⭐ {stars(app['rating'])}\n"
+            f"👤 *{app_dict['js_name']}*\n"
+            f"📞 {app_dict['js_phone']}\n"
+            f"📆 {app_dict['js_experience'] or '—'}\n"
+            f"⭐ {stars(app_dict['rating'])}\n"
             f"{exp_text}\n"
-            f"💼 {app['title']} | 🏷 {app['category']}",
+            f"💼 {app_dict['title']} | 🏷 {app_dict['category']}",
             inline([
-                [("✅ تأیید", f"admapp:{app['app_id']}"),
-                 ("❌ رد", f"admrejectapp:{app['app_id']}")],
-                [("✏️ ویرایش", f"adm_edit_app:{app['app_id']}:cover_letter")]
+                [("✅ تأیید", f"admapp:{app_dict['app_id']}"),
+                 ("❌ رد", f"admrejectapp:{app_dict['app_id']}")],
+                [("✏️ ویرایش", f"adm_edit_app:{app_dict['app_id']}:cover_letter")]
             ]))
 
 async def adm_users(s, cid):
