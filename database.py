@@ -1,5 +1,5 @@
 """
-دیتابیس همراکار - نسخه تولیدی نهایی
+دیتابیس همراکار - نسخه نهایی با رفع خطاهای FOREIGN KEY و قفل دیتابیس
 """
 
 import sqlite3
@@ -64,7 +64,7 @@ def _c():
     c = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")
-    c.execute("PRAGMA busy_timeout=10000")
+    c.execute("PRAGMA busy_timeout=30000")   # 🔥 افزایش timeout
     c.execute("PRAGMA foreign_keys=ON")
     c.execute("PRAGMA cache_size=10000")
     return c
@@ -265,6 +265,8 @@ def set_state(cid, state, data=None):
         data = {}
     with _lock:
         c = _c()
+        # 🔥 اطمینان از وجود کاربر در جدول users
+        c.execute("INSERT OR IGNORE INTO users (chat_id) VALUES (?)", (cid,))
         c.execute(
             "INSERT OR REPLACE INTO user_states(chat_id,state,data,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP)",
             (cid, state, json.dumps(data, ensure_ascii=False))
