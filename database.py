@@ -493,6 +493,31 @@ async def clear_state(cid: int) -> bool:
     return await _run_db(_clear_state_sync, cid)
 
 
+def _is_state_stale_sync(cid: int, ttl_minutes: int = 30) -> bool:
+    """Check if user's state is older than ttl_minutes. Returns True if stale."""
+    conn = _c()
+    try:
+        row = conn.execute(
+            "SELECT updated_at FROM user_states WHERE chat_id=? AND deleted_at IS NULL AND state != ?",
+            (cid, "IDLE"),
+        ).fetchone()
+        if not row or not row[0]:
+            return False
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+        try:
+            updated = _dt.strptime(row[0], "%Y-%m-%d %H:%M:%S")
+            return _dt.utcnow() - updated > _td(minutes=ttl_minutes)
+        except Exception:
+            return False
+    finally:
+        conn.close()
+
+
+async def is_state_stale(cid: int, ttl_minutes: int = 30) -> bool:
+    return await _run_db(_is_state_stale_sync, cid, ttl_minutes)
+
+
 # ==================== USERS ====================
 def _get_user_sync(cid: int):
     conn = _c()
@@ -1470,13 +1495,18 @@ async def get_matching_seekers_for_job(
 
 
 def _get_matching_employers_for_seeker_sync(
-    category: str, province: str, cities: List[str]
+    categories: List[str], province: str, cities: List[str]
 ):
+    """Get employer chat_ids with active jobs matching any of the seeker's categories + location.
+    Uses a single IN query instead of N separate queries."""
+    if not categories:
+        return []
     conn = _c()
     try:
-        sql = """SELECT DISTINCT emp_cid FROM jobs WHERE status='active' AND admin_approved=1
-                 AND category = ? AND (province = ?"""
-        params = [category, province]
+        placeholders = ",".join(["?"] * len(categories))
+        sql = f"""SELECT DISTINCT emp_cid FROM jobs WHERE status='active' AND admin_approved=1
+                 AND category IN ({placeholders}) AND (province = ?"""
+        params = list(categories) + [province]
         if cities:
             sql += " OR province IN (" + ",".join(["?"] * len(cities)) + ")"
             params += cities
@@ -1488,10 +1518,10 @@ def _get_matching_employers_for_seeker_sync(
 
 
 async def get_matching_employers_for_seeker(
-    category: str, province: str, cities: List[str]
+    categories: List[str], province: str, cities: List[str]
 ):
     return await _run_db(
-        _get_matching_employers_for_seeker_sync, category, province, cities
+        _get_matching_employers_for_seeker_sync, categories, province, cities
     )
 
 
