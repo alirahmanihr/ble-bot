@@ -196,6 +196,8 @@ def _run_migrations(conn: sqlite3.Connection, current_version: int) -> None:
     conn.execute(
         "CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT)"
     )
+
+    # === v1: base tables ===
     if current_version < 1:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS users (
@@ -292,11 +294,16 @@ def _run_migrations(conn: sqlite3.Connection, current_version: int) -> None:
             "ratings",
         ]:
             try:
-                conn.execute(
-                    f"ALTER TABLE {table} ADD COLUMN deleted_at TIMESTAMP DEFAULT NULL"
-                )
-            except:
-                pass
+                cols = [
+                    c[1] for c in conn.execute(f"PRAGMA table_info({table})").fetchall()
+                ]
+                if "deleted_at" not in cols:
+                    conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN deleted_at TIMESTAMP DEFAULT NULL"
+                    )
+                    log.info(f"  ✅ added deleted_at to {table}")
+            except Exception as e:
+                log.warning(f"  ⚠️ could not add deleted_at to {table}: {e}")
         _set_schema_version(conn, 2)
 
     if current_version < 3:
@@ -343,6 +350,54 @@ async def _run_db(fn, *args, **kwargs):
         return await asyncio.to_thread(fn, *args, **kwargs)
 
 
+def _repair_schema(conn: sqlite3.Connection):
+    """Ensure required columns exist on all tables (belt-and-suspenders repair)."""
+    # deleted_at on all tables
+    tables = [
+        "users",
+        "jobs",
+        "applications",
+        "bookmarks",
+        "notifications",
+        "activity_logs",
+        "direct_messages",
+        "ratings",
+        "user_states",
+        "work_experiences",
+    ]
+    for table in tables:
+        try:
+            cols = [
+                c[1] for c in conn.execute(f"PRAGMA table_info({table})").fetchall()
+            ]
+            if "deleted_at" not in cols:
+                conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN deleted_at TIMESTAMP DEFAULT NULL"
+                )
+                log.info(f"  🔧 repaired: added deleted_at to {table}")
+        except Exception:
+            pass  # table might not exist yet — ignore
+
+    # Repair missing columns on users table (old DBs may lack these)
+    try:
+        cols = [c[1] for c in conn.execute("PRAGMA table_info(users)").fetchall()]
+        needed = {
+            "allow_employer_notify": "INTEGER DEFAULT 0",
+            "resume_complete": "INTEGER DEFAULT 0",
+            "js_about": "TEXT",
+            "js_cities": "TEXT DEFAULT '[]'",
+            "js_categories": "TEXT DEFAULT '[]'",
+            "js_skills": "TEXT DEFAULT '[]'",
+            "work_experience": "TEXT DEFAULT '[]'",
+        }
+        for col_name, col_def in needed.items():
+            if col_name not in cols:
+                conn.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_def}")
+                log.info(f"  🔧 repaired: added {col_name} to users")
+    except Exception as e:
+        log.warning(f"  ⚠️ schema repair on users: {e}")
+
+
 # ==================== INIT ====================
 def _init_db_sync():
     conn = _c()
@@ -356,6 +411,8 @@ def _init_db_sync():
             log.info(f"✅ دیتابیس به نسخه {SCHEMA_VERSION} مهاجرت داده شد")
         else:
             log.info(f"✅ دیتابیس در نسخه {SCHEMA_VERSION} است")
+        # Always repair missing columns (belt-and-suspenders)
+        _repair_schema(conn)
         conn.commit()
     except Exception as e:
         conn.rollback()
@@ -1500,8 +1557,9 @@ async def get_matched_jobs(seeker_cid: int, limit: int = 10):
 
     jobs = await _run_db(_run)
     scored = []
+    seeker_dict = dict(seeker)
     for job in jobs:
-        sc = match_score(seeker, job)
+        sc = match_score(seeker_dict, dict(job))
         if sc >= 20:
             scored.append((sc, dict(job)))
     scored.sort(key=lambda x: x[0], reverse=True)
@@ -1524,8 +1582,9 @@ async def get_matched_seekers(job_id: int, limit: int = 10):
 
     seekers = await _run_db(_run)
     scored = []
+    job_dict = dict(job)
     for seeker in seekers:
-        sc = match_score(seeker, job)
+        sc = match_score(dict(seeker), job_dict)
         if sc >= 20:
             scored.append((sc, dict(seeker)))
     scored.sort(key=lambda x: x[0], reverse=True)
