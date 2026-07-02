@@ -3142,6 +3142,7 @@ async def edit_js_menu(s, cid):
 
 # ==================== MAIN LOOP ====================
 async def main():
+    print("🔵 [1/5] Checking TOKEN...")
     if not TOKEN or TOKEN == "YOUR_BALE_BOT_TOKEN_HERE":
         print("\n" + "═" * 50)
         print("❌  فایل .env را باز کنید و BOT_TOKEN را وارد کنید!")
@@ -3149,15 +3150,19 @@ async def main():
         return
 
     api.set_token(TOKEN)
+    print("🔵 [2/5] Starting database...")
     log.info("🔄 در حال راه‌اندازی دیتابیس...")
     try:
         await db.init_db()
         log.info("✅ دیتابیس با موفقیت راه‌اندازی شد")
+        print("   ✅ Database OK")
     except Exception as e:
         log.error(f"❌ خطا در راه‌اندازی دیتابیس: {e}", exc_info=True)
+        print(f"   ❌ Database ERROR: {e}")
         return
 
     log.info(f"✅ {BOT_NAME} شروع شد")
+    print("🔵 [3/5] Starting expire loop...")
 
     # background task: auto-expire old jobs every 60 seconds
     async def _expire_loop():
@@ -3171,6 +3176,7 @@ async def main():
     expire_task = asyncio.create_task(_expire_loop())
 
     offset = 0
+    print("🔵 [4/5] Skipping old updates...")
     try:
         async with aiohttp.ClientSession() as tmp:
             r = await api.get_updates(tmp, timeout=1, limit=1)
@@ -3180,13 +3186,18 @@ async def main():
     except:
         pass
 
+    print("🔵 [5/5] Connecting to Bale API...")
     async with aiohttp.ClientSession() as s:
         me = await api.get_me(s)
         if not me.get("ok"):
             log.error("❌ اتصال به بله ناموفق! توکن را بررسی کنید.")
+            print("   ❌ Connection FAILED - check BOT_TOKEN!")
             return
         api.set_bot_username(me["result"].get("username", ""))
-        log.info(f"✅ متصل: @{me['result'].get('username')}")
+        bot_uname = me["result"].get("username", "unknown")
+        log.info(f"✅ متصل: @{bot_uname}")
+        print(f"   ✅ Connected as @{bot_uname}")
+        print("   🤖 Bot is now listening for messages...")
 
         while True:
             try:
@@ -3205,10 +3216,12 @@ async def main():
 
             except asyncio.CancelledError:
                 log.info("ربات متوقف شد")
+                print("⏹ Bot stopped.")
                 expire_task.cancel()
                 break
             except Exception as e:
                 log.error(f"polling error: {e}")
+                print(f"   ⚠ Polling error: {e}")
                 await asyncio.sleep(5)
 
 
