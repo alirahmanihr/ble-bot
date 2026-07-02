@@ -72,6 +72,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ==================== STATE CONSTANTS ====================
+PAGE_SIZE = 10  # results per page for all searches/lists
 IDLE = "IDLE"
 ER_NAME, ER_COMPANY, ER_INDUSTRY, ER_PHONE, ER_POSITION = (
     "ER_NAME",
@@ -134,6 +135,62 @@ JS_PROFILE_DONE = "JS_PROFILE_DONE"
 EMP_PROFILE_DONE = "EMP_PROFILE_DONE"
 
 
+# ==================== SECURITY: Field Whitelists ====================
+# Only these fields can be edited via user input to prevent field injection
+_ALLOWED_EMP_EDIT = frozenset(
+    {
+        "emp_name",
+        "emp_company",
+        "emp_industry",
+        "emp_phone",
+        "emp_position",
+        "emp_address",
+        "emp_email",
+        "emp_website",
+    }
+)
+_ALLOWED_JS_EDIT = frozenset(
+    {
+        "js_name",
+        "js_phone",
+        "js_job_title",
+        "js_province",
+        "js_experience",
+        "js_education",
+        "js_salary_min",
+        "js_dob",
+        "js_gender",
+        "js_relocate",
+        "js_categories",
+        "js_skills",
+        "js_about",
+        "js_cities",
+    }
+)
+_ALLOWED_JOB_EDIT = frozenset(
+    {
+        "title",
+        "emp_type",
+        "province",
+        "city",
+        "salary_min",
+        "salary_max",
+        "category",
+        "gender_need",
+        "age_min",
+        "age_max",
+        "education_need",
+        "experience_need",
+        "description",
+        "benefits",
+        "contact_phone",
+        "contact_email",
+        "contact_address",
+    }
+)
+# Admin edit uses these same sets but is guarded by ADMIN_IDS check
+
+
 # ==================== HELPERS ====================
 async def _validate_phone(s, cid, role, raw_text):
     """Validate phone format and uniqueness. Returns (ok, phone_or_error)."""
@@ -180,7 +237,7 @@ async def handle_extended_state(s, cid, state, data, text) -> bool:
 
     if state == EDIT_EMP_FIELD:
         field = data.get("edit_field")
-        if field:
+        if field and field in _ALLOWED_EMP_EDIT:
             val = "" if text == "0" else text
             if field == "emp_phone":
                 ok, result = await _validate_phone(s, cid, "employer", text)
@@ -231,8 +288,11 @@ async def handle_extended_state(s, cid, state, data, text) -> bool:
                     await show_menu(s, cid, u)
                 return True
             else:
-                await db.upsert_user(cid, **{field: val})
-                await add_activity_log(cid, "ویرایش پروفایل", f"تغییر {field} به {val}")
+                if field in _ALLOWED_JS_EDIT:
+                    await db.upsert_user(cid, **{field: val})
+                    await add_activity_log(
+                        cid, "ویرایش پروفایل", f"تغییر {field} به {val}"
+                    )
             await db.clear_state(cid)
             await api.send_message(s, cid, "✅ بروزرسانی شد!")
             u = await db.get_user(cid)
@@ -243,7 +303,7 @@ async def handle_extended_state(s, cid, state, data, text) -> bool:
     if state == EDIT_JOB_FIELD:
         job_id = data.get("edit_job_id")
         field = data.get("edit_field")
-        if job_id and field:
+        if job_id and field and field in _ALLOWED_JOB_EDIT:
             val = "" if text == "0" else text
             if field == "salary":
                 parts = re.findall(r"\d+", text.replace(",", ""))
@@ -1139,7 +1199,7 @@ async def handle_state(s, cid, state, data, text, doc, photos):
     elif state == ADM_EDIT_JOB:
         jid = data.get("edit_job_id")
         field = data.get("edit_field")
-        if jid and field:
+        if jid and field in _ALLOWED_JOB_EDIT:
             await db.update_job_by_admin(jid, cid, **{field: text})
             await add_activity_log(
                 cid, "ویرایش آگهی توسط ادمین", f"آگهی {jid}", f"تغییر {field}"
@@ -1151,7 +1211,7 @@ async def handle_state(s, cid, state, data, text, doc, photos):
     elif state == ADM_EDIT_APP:
         aid = data.get("edit_app_id")
         field = data.get("edit_field")
-        if aid and field:
+        if aid and field in ("cover_letter", "resume_file"):
             await db.update_application_by_admin(aid, cid, **{field: text})
             await add_activity_log(
                 cid, "ویرایش رزومه توسط ادمین", f"رزومه {aid}", f"تغییر {field}"
@@ -2478,8 +2538,12 @@ async def save_seeker_profile(s, cid, data):
     await db.clear_state(cid)
     await add_activity_log(cid, "تکمیل پروفایل", "تکمیل پروفایل کارجو")
     user = await db.get_user(cid)
-    if user and not user["private_mode"] and user["allow_employer_notify"] == 1:
-        cities = jlist(user.get("js_cities", []))
+    if (
+        user
+        and not user["private_mode"]
+        and int(user["allow_employer_notify"] or 0) == 1
+    ):
+        cities = jlist(dict(user).get("js_cities", "[]"))
         await _notify_employers_about_seeker(s, dict(user), cities)
     await api.send_message(
         s,
@@ -2689,7 +2753,7 @@ async def my_jobs(s, cid, page=0):
     nav = []
     if page > 0:
         nav.append((f"◀️ صفحه {page}", f"myjobs:{page - 1}"))
-    if (page + 1) * 10 < total:
+    if (page + 1) * PAGE_SIZE < total:
         nav.append((f"▶️ صفحه {page + 2}", f"myjobs:{page + 1}"))
     if nav:
         await api.send_message(s, cid, "صفحه‌بندی:", inline([nav]))
@@ -2773,7 +2837,7 @@ async def do_search(s, cid, data, page=0):
             ),
         )
     # pagination buttons
-    per_page = 10
+    per_page = PAGE_SIZE
     if (page + 1) * per_page < total:
         next_page = page + 1
         await api.send_message(
@@ -2831,7 +2895,7 @@ async def do_search_seeker(s, cid, data, page=0):
             inline([[("👁 مشاهده کامل", f"viewseeker:{sk_dict['chat_id']}")]]),
         )
     # pagination buttons
-    per_page = 10
+    per_page = PAGE_SIZE
     if (page + 1) * per_page < total:
         next_page = page + 1
         await api.send_message(
@@ -3142,27 +3206,37 @@ async def edit_js_menu(s, cid):
 
 # ==================== MAIN LOOP ====================
 async def main():
-    print("🔵 [1/5] Checking TOKEN...")
+    # Ensure UTF-8 output on Windows console
+    import io as _io
+
+    try:
+        if hasattr(sys.stdout, "buffer"):
+            sys.stdout = _io.TextIOWrapper(
+                sys.stdout.buffer, encoding="utf-8", errors="replace"
+            )
+        if hasattr(sys.stderr, "buffer"):
+            sys.stderr = _io.TextIOWrapper(
+                sys.stderr.buffer, encoding="utf-8", errors="replace"
+            )
+    except Exception:
+        pass
+
     if not TOKEN or TOKEN == "YOUR_BALE_BOT_TOKEN_HERE":
-        print("\n" + "═" * 50)
+        print("\n" + "=" * 50)
         print("❌  فایل .env را باز کنید و BOT_TOKEN را وارد کنید!")
-        print("═" * 50 + "\n")
+        print("=" * 50 + "\n")
         return
 
     api.set_token(TOKEN)
-    print("🔵 [2/5] Starting database...")
     log.info("🔄 در حال راه‌اندازی دیتابیس...")
     try:
         await db.init_db()
         log.info("✅ دیتابیس با موفقیت راه‌اندازی شد")
-        print("   ✅ Database OK")
     except Exception as e:
         log.error(f"❌ خطا در راه‌اندازی دیتابیس: {e}", exc_info=True)
-        print(f"   ❌ Database ERROR: {e}")
         return
 
     log.info(f"✅ {BOT_NAME} شروع شد")
-    print("🔵 [3/5] Starting expire loop...")
 
     # background task: auto-expire old jobs every 60 seconds
     async def _expire_loop():
@@ -3176,7 +3250,6 @@ async def main():
     expire_task = asyncio.create_task(_expire_loop())
 
     offset = 0
-    print("🔵 [4/5] Skipping old updates...")
     try:
         async with aiohttp.ClientSession() as tmp:
             r = await api.get_updates(tmp, timeout=1, limit=1)
@@ -3186,18 +3259,16 @@ async def main():
     except:
         pass
 
-    print("🔵 [5/5] Connecting to Bale API...")
     async with aiohttp.ClientSession() as s:
         me = await api.get_me(s)
         if not me.get("ok"):
             log.error("❌ اتصال به بله ناموفق! توکن را بررسی کنید.")
-            print("   ❌ Connection FAILED - check BOT_TOKEN!")
             return
         api.set_bot_username(me["result"].get("username", ""))
         bot_uname = me["result"].get("username", "unknown")
         log.info(f"✅ متصل: @{bot_uname}")
-        print(f"   ✅ Connected as @{bot_uname}")
-        print("   🤖 Bot is now listening for messages...")
+        print(f"Hamrakar Bot connected as @{bot_uname}")
+        print("Bot is now running and listening for messages...")
 
         while True:
             try:
@@ -3216,12 +3287,10 @@ async def main():
 
             except asyncio.CancelledError:
                 log.info("ربات متوقف شد")
-                print("⏹ Bot stopped.")
                 expire_task.cancel()
                 break
             except Exception as e:
                 log.error(f"polling error: {e}")
-                print(f"   ⚠ Polling error: {e}")
                 await asyncio.sleep(5)
 
 
