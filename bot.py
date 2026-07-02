@@ -749,6 +749,17 @@ async def process(s, upd):
             await on_cb(s, upd["callback_query"])
     except Exception as e:
         log.error(f"process error: {e}", exc_info=True)
+        # Try to tell the user something went wrong
+        try:
+            cid = msg_cid(upd.get("message", {})) or cb_cid(
+                upd.get("callback_query", {})
+            )
+            if cid:
+                await _send_safe(
+                    s, cid, "⚠️ خطایی رخ داد. لطفاً دوباره تلاش کنید یا /start را بزنید."
+                )
+        except Exception:
+            pass  # best-effort — don't let error-recovery crash too
 
 
 # ==================== MESSAGE HANDLER ====================
@@ -763,6 +774,17 @@ async def on_msg(s, msg):
         return
 
     state, data = await db.get_state(cid)
+
+    # ── State staleness: if wizard inactive > 30 min, reset and return to menu ──
+    if state != IDLE and await db.is_state_stale(cid, ttl_minutes=30):
+        await db.clear_state(cid)
+        log.info(f"⏰ state expired for {cid}: {state}")
+        user = await db.get_user(cid)
+        if user and user["role"]:
+            await show_menu(s, cid, user, "⏰ جلسه قبلی منقضی شد. به منو بازگشتید.")
+        else:
+            await do_welcome(s, cid)
+        return
 
     if text in ("🔙 بازگشت", "🔙 بازگشت به منو", "🔙 منو"):
         await db.clear_state(cid)
@@ -2232,11 +2254,19 @@ _NOTIFY_SEM = asyncio.Semaphore(5)  # max 5 concurrent API calls
 
 
 async def _send_safe(s, cid, text, kb=None):
-    """Send message with rate-limit semaphore, never raise. Returns True on success."""
+    """Send message with rate-limit semaphore. Never raises. Returns True on success.
+
+    Handles the case where the aiohttp session has become invalid (None or closed)
+    by catching the specific RuntimeError from bale_api._post's session guard.
+    """
     async with _NOTIFY_SEM:
         try:
             await api.send_message(s, cid, text, kb)
             return True
+        except RuntimeError as e:
+            # Session-guard error: session is None or closed — log and skip
+            log.error(f"_send_safe to {cid}: session error — {e}")
+            return False
         except Exception as e:
             log.warning(f"_send_safe to {cid}: {e}")
             return False
@@ -2274,38 +2304,48 @@ async def _notify_seekers_job(s, job):
 
 
 async def _notify_employers_about_seeker(s, seeker, cities):
-    category = seeker.get("js_categories", "[]")
-    if not category:
+    """Notify matching employers about a new job seeker.
+
+    Uses a single batched DB query instead of N queries (one per category).
+    """
+    category_json = seeker.get("js_categories", "[]")
+    if not category_json:
         return
     try:
-        cats = json.loads(category)
+        cats = json.loads(category_json)
     except Exception as e:
         log.warning(
             f"_notify_employers_about_seeker: json.loads failed for seeker {seeker.get('chat_id')}: {e}"
         )
-        cats = []
+        return
+    if not cats:
+        return
+
+    # Single batched query instead of N separate queries
+    employers = await db.get_matching_employers_for_seeker(
+        cats, seeker.get("js_province", ""), cities
+    )
+    if not employers:
+        return
+
     tasks = []
-    seen_emp = set()
-    for cat in cats:
-        employers = await db.get_matching_employers_for_seeker(
-            cat, seeker.get("js_province"), cities
+    for emp_cid in employers:
+        text = (
+            f"👤 *کارجوی جدید متناسب با آگهی شما*\n\n"
+            f"نام: {seeker['js_name']}\n"
+            f"دسته: {', '.join(cats)}\n"
+            f"استان: {seeker.get('js_province', '—')}\n"
+            f"برای مشاهده پروفایل کلیک کنید:"
         )
-        for emp_cid in employers:
-            if emp_cid in seen_emp:
-                continue
-            seen_emp.add(emp_cid)
-            text = (
-                f"👤 *کارجوی جدید متناسب با آگهی شما*\n\n"
-                f"نام: {seeker['js_name']}\n"
-                f"دسته: {cat}\n"
-                f"استان: {seeker.get('js_province', '—')}\n"
-                f"برای مشاهده پروفایل کلیک کنید:"
+        kb = inline([[("👁 مشاهده پروفایل", f"viewseeker:{seeker['chat_id']}")]])
+        tasks.append(_send_safe(s, emp_cid, text, kb))
+        # Schedule notification (fire-and-forget, no await per employer)
+        asyncio.ensure_future(
+            db.add_notification(
+                emp_cid, f"👤 کارجوی جدید در دسته {cats[0]} ثبت نام کرد."
             )
-            kb = inline([[("👁 مشاهده پروفایل", f"viewseeker:{seeker['chat_id']}")]])
-            tasks.append(_send_safe(s, emp_cid, text, kb))
-            await db.add_notification(
-                emp_cid, f"👤 کارجوی جدید در دسته {cat} ثبت نام کرد."
-            )
+        )
+
     if tasks:
         await asyncio.gather(*tasks)
 
