@@ -12,10 +12,14 @@ async def _post(s, method, **kw):
     try:
         async with s.post(f"{_BASE}/{method}", json=kw,
                           timeout=aiohttp.ClientTimeout(total=60)) as r:
+            if r.status != 200:
+                error_text = await r.text()
+                log.error(f"API {method} HTTP {r.status}: {error_text}")
+                raise Exception(f"HTTP {r.status}: {error_text}")
             return await r.json()
     except Exception as e:
         log.error(f"API {method}: {e}")
-        return {"ok": False}
+        raise   # propagate to caller
 
 async def get_me(s):
     return await _post(s, "getMe")
