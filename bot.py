@@ -761,9 +761,9 @@ def adm_menu():
     return reply_kb(
         [
             ["📋 تأیید آگهی", "📬 تأیید رزومه"],
-            ["📊 آمار کامل", "🔔 اعلان‌ها"],
-            ["📢 پیام همگانی", "🚫 مدیریت کاربران"],
-            ["📑 لاگ ادمین", "🔙 منو"],
+            ["📊 آمار کامل", "📢 پیام همگانی"],
+            ["🚫 مدیریت کاربران", "📑 لاگ ادمین"],
+            ["🔙 منو"],
         ]
     )
 
@@ -804,17 +804,27 @@ async def process(s, upd):
             await on_cb(s, upd["callback_query"])
     except Exception as e:
         log.error(f"process error: {e}", exc_info=True)
-        # Try to tell the user something went wrong
+        # Try to tell the user something went wrong and clear their state
         try:
             cid = msg_cid(upd.get("message", {})) or cb_cid(
                 upd.get("callback_query", {})
             )
             if cid:
-                await _send_safe(
-                    s,
-                    cid,
-                    "⚠️ خطایی رخ داد. لطفاً دوباره تلاش کنید یا /start را بزنید.\n📞 پشتیبانی: @Hamrakar_Admin",
-                )
+                await db.clear_state(cid)
+                user = await db.get_user(cid)
+                if user and user["role"]:
+                    await show_menu(
+                        s,
+                        cid,
+                        user,
+                        "⚠️ خطایی رخ داد. به منو بازگشتید.\n📞 پشتیبانی: @Hamrakar_Admin",
+                    )
+                else:
+                    await _send_safe(
+                        s,
+                        cid,
+                        "⚠️ خطایی رخ داد. لطفاً /start را بزنید.\n📞 پشتیبانی: @Hamrakar_Admin",
+                    )
         except Exception:
             pass  # best-effort — don't let error-recovery crash too
 
@@ -2568,7 +2578,8 @@ async def _notify_seekers_job(s, job):
     province = job.get("province")
     city = job.get("city")
     seekers = await db.get_matching_seekers_for_job(category, province, city)
-    tasks = []
+    send_tasks = []
+    db_tasks = []
     for row in seekers:
         try:
             cid = row["chat_id"]
@@ -2587,23 +2598,22 @@ async def _notify_seekers_job(s, job):
                     ]
                 ]
             )
-            tasks.append(_send_safe(s, cid, text, kb))
-            try:
-                await asyncio.wait_for(
+            send_tasks.append(_send_safe(s, cid, text, kb))
+            db_tasks.append(
+                asyncio.wait_for(
                     db.add_notification(
                         cid, f"📢 آگهی جدید: {job.get('title')} در دسته {category}"
                     ),
                     timeout=3.0,
                 )
-            except asyncio.TimeoutError:
-                log.warning(f"DB notify timeout for seeker {cid}")
-            except Exception as e:
-                log.error(f"DB notify error for seeker {cid}: {e}")
+            )
         except Exception as e:
             log.error(f"Notify prep error for seeker {row.get('chat_id', '?')}: {e}")
             continue
-    if tasks:
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+    # Run send and DB tasks in parallel
+    all_tasks = send_tasks + db_tasks
+    if all_tasks:
+        results = await asyncio.gather(*all_tasks, return_exceptions=True)
         for result in results:
             if isinstance(result, Exception):
                 log.warning(f"Notify gather error: {result}")
@@ -3064,9 +3074,23 @@ async def finalize_job(s, cid, data):
         contact_email=emp_email,
         contact_address=contact_address,
     )
+    if not jid:
+        log.error(
+            f"finalize_job: db.create_job returned None for cid={cid}, title={data.get('job_title')}"
+        )
+        await _send_safe(
+            s,
+            cid,
+            "❌ خطا در ثبت آگهی. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.",
+        )
+        await db.clear_state(cid)
+        user = await db.get_user(cid)
+        if user:
+            await show_menu(s, cid, user)
+        return
     await db.clear_state(cid)
     await add_activity_log(cid, "ثبت آگهی", f"ثبت آگهی {data['job_title']}")
-    await api.send_message(
+    await _send_safe(
         s,
         cid,
         f"✅ *آگهی با موفقیت ثبت شد!*\n\n"
@@ -3117,18 +3141,7 @@ async def my_jobs(s, cid, page=0):
         days = db.days_since(post_date) if post_date else 0
         days_text = f"({days} روز پیش)" if days > 0 else "(امروز)"
         approved_date = job_dict.get("approved_date") or "در انتظار"
-        expiry_date = job_dict.get("expiry_date")
-        if expiry_date:
-            try:
-                from datetime import datetime
-
-                expiry_date = datetime.strptime(
-                    expiry_date, "%Y-%m-%d %H:%M:%S"
-                ).strftime("%Y/%m/%d")
-            except:
-                expiry_date = "—"
-        else:
-            expiry_date = "—"
+        expiry_date = job_dict.get("expiry_date") or "—"
 
         share_btn = []
         if job_dict.get("status") == "active" and job_dict.get("admin_approved"):
