@@ -1,7 +1,7 @@
 import dotenv from 'dotenv';
 import { resolve } from 'path';
-// Load .env from project root (two levels up from apps/proxy/src)
-dotenv.config({ path: resolve(import.meta.dirname, '..', '..', '..', '..', '.env') });
+// Load .env from project root (three levels up from apps/proxy/src)
+dotenv.config({ path: resolve(import.meta.dirname, '..', '..', '..', '.env') });
 
 import cors from 'cors';
 import express from 'express';
