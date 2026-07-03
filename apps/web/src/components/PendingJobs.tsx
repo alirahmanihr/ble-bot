@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Check, X, AlertCircle, Building2, Tag, Banknote, MapPin } from 'lucide-react';
+import { Check, X, AlertCircle, Building2, Tag, Banknote, MapPin, Loader2 } from 'lucide-react';
 import type { Job } from '@hamrakar/shared';
 import useSWR from 'swr';
 import { swrFetcher } from '../api';
@@ -16,27 +16,39 @@ export default function PendingJobs() {
   });
   const [rejecting, setRejecting] = useState<number | null>(null);
   const [reasons, setReasons] = useState<Record<number, string>>({});
+  const [processing, setProcessing] = useState<Set<number>>(new Set());
 
   const pendingJobs = data?.jobs?.filter(j => j.status === 'pending' || !j.admin_approved) ?? [];
 
   const handleApprove = async (jobId: number) => {
+    setProcessing(prev => new Set(prev).add(jobId));
     try {
       await approveJob(jobId);
-      mutate();
+      // Optimistic removal: mutate with filtered data
+      mutate(
+        data ? { ...data, jobs: data.jobs.filter(j => j.job_id !== jobId) } : data,
+        false,
+      );
     } catch {
-      // Error handled by SWR
+      // Error handled by SWR revalidation
     }
+    setProcessing(prev => { const next = new Set(prev); next.delete(jobId); return next; });
   };
 
   const handleReject = async (jobId: number) => {
+    setProcessing(prev => new Set(prev).add(jobId));
     try {
       await rejectJob(jobId, reasons[jobId] || '');
       setRejecting(null);
       setReasons(prev => { const next = { ...prev }; delete next[jobId]; return next; });
-      mutate();
+      mutate(
+        data ? { ...data, jobs: data.jobs.filter(j => j.job_id !== jobId) } : data,
+        false,
+      );
     } catch {
-      // Error handled by SWR
+      // Error handled by SWR revalidation
     }
+    setProcessing(prev => { const next = new Set(prev); next.delete(jobId); return next; });
   };
 
   if (error) return (
@@ -104,20 +116,26 @@ export default function PendingJobs() {
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    onClick={() => handleApprove(job.job_id)}
-                    className="p-2 rounded-lg bg-emerald-600/10 text-emerald-400 hover:bg-emerald-600/20 transition-colors cursor-pointer"
-                    title="تأیید"
-                  >
-                    <Check className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => { setRejecting(job.job_id); }}
-                    className="p-2 rounded-lg bg-rose-600/10 text-rose-400 hover:bg-rose-600/20 transition-colors cursor-pointer"
-                    title="رد"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
+                  {processing.has(job.job_id) ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => handleApprove(job.job_id)}
+                        className="p-2 rounded-lg bg-emerald-600/10 text-emerald-400 hover:bg-emerald-600/20 transition-colors cursor-pointer"
+                        title="تأیید"
+                      >
+                        <Check className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => { setRejecting(job.job_id); }}
+                        className="p-2 rounded-lg bg-rose-600/10 text-rose-400 hover:bg-rose-600/20 transition-colors cursor-pointer"
+                        title="رد"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
 

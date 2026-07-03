@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Check, X, AlertCircle, FileText, User, Briefcase } from 'lucide-react';
+import { Check, X, AlertCircle, FileText, User, Briefcase, Loader2 } from 'lucide-react';
 import type { Application } from '@hamrakar/shared';
 import useSWR from 'swr';
 import { swrFetcher } from '../api';
@@ -13,23 +13,34 @@ export default function PendingApplications() {
   );
   const [rejecting, setRejecting] = useState<number | null>(null);
   const [reasons, setReasons] = useState<Record<number, string>>({});
+  const [processing, setProcessing] = useState<Set<number>>(new Set());
 
   const pendingApps = data?.applications?.filter(a => a.status === 'pending_admin') ?? [];
 
   const handleApprove = async (appId: number) => {
+    setProcessing(prev => new Set(prev).add(appId));
     try {
       await approveApplication(appId);
-      mutate();
+      mutate(
+        data ? { ...data, applications: data.applications.filter(a => a.app_id !== appId) } : data,
+        false,
+      );
     } catch { /* SWR handles error */ }
+    setProcessing(prev => { const next = new Set(prev); next.delete(appId); return next; });
   };
 
   const handleReject = async (appId: number) => {
+    setProcessing(prev => new Set(prev).add(appId));
     try {
       await rejectApplication(appId, reasons[appId] || '');
       setRejecting(null);
       setReasons(prev => { const next = { ...prev }; delete next[appId]; return next; });
-      mutate();
+      mutate(
+        data ? { ...data, applications: data.applications.filter(a => a.app_id !== appId) } : data,
+        false,
+      );
     } catch { /* SWR handles error */ }
+    setProcessing(prev => { const next = new Set(prev); next.delete(appId); return next; });
   };
 
   if (error) return (
@@ -89,20 +100,26 @@ export default function PendingApplications() {
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    onClick={() => handleApprove(app.app_id)}
-                    className="p-2 rounded-lg bg-emerald-600/10 text-emerald-400 hover:bg-emerald-600/20 transition-colors cursor-pointer"
-                    title="تأیید"
-                  >
-                    <Check className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => { setRejecting(app.app_id); }}
-                    className="p-2 rounded-lg bg-rose-600/10 text-rose-400 hover:bg-rose-600/20 transition-colors cursor-pointer"
-                    title="رد"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
+                  {processing.has(app.app_id) ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => handleApprove(app.app_id)}
+                        className="p-2 rounded-lg bg-emerald-600/10 text-emerald-400 hover:bg-emerald-600/20 transition-colors cursor-pointer"
+                        title="تأیید"
+                      >
+                        <Check className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => { setRejecting(app.app_id); }}
+                        className="p-2 rounded-lg bg-rose-600/10 text-rose-400 hover:bg-rose-600/20 transition-colors cursor-pointer"
+                        title="رد"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
 

@@ -37,6 +37,11 @@ export default function UsersSection() {
           <Users className="w-4 h-4 text-indigo-400" />
           کاربران
         </h2>
+        <span className="text-[11px] bg-slate-800 text-slate-400 px-2.5 py-1 rounded-full font-medium">
+          {filtered.length !== users.length
+            ? `${filtered.length} / ${users.length}`
+            : `${users.length} نفر`}
+        </span>
 
         <div className="flex items-center gap-2">
           <div className="relative">

@@ -18,7 +18,7 @@ export default function PhoneSimulator() {
   const [inputText, setInputText] = useState('');
   const [messages, setMessages] = useState<ChatBubble[]>([]);
   const [sending, setSending] = useState(false);
-  const [lastMsgId, setLastMsgId] = useState(0);
+  const lastMsgIdRef = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -33,11 +33,11 @@ export default function PhoneSimulator() {
 
   const botName = botInfo?.result?.first_name || 'ربات همراکار';
 
-  // Poll for new messages
+  // Poll for new messages — uses ref for lastMsgId to avoid interval recreation
   const pollMessages = useCallback(async () => {
     if (!activeChatId) return;
     try {
-      const data = await getMessages(activeChatId, lastMsgId, 50);
+      const data = await getMessages(activeChatId, lastMsgIdRef.current, 50);
       if (data?.messages?.length) {
         setMessages(prev => {
           const existing = new Set(prev.map(m => m.id));
@@ -49,16 +49,16 @@ export default function PhoneSimulator() {
             text: m.text,
             timestamp: m.created_at,
           }))];
-          // Update last seen ID
+          // Update last seen ID via ref
           const maxId = Math.max(...all.map(m => m.id));
-          setLastMsgId(maxId);
+          lastMsgIdRef.current = maxId;
           return all;
         });
       }
     } catch {
       // Silently fail — messages endpoint may not be available yet
     }
-  }, [activeChatId, lastMsgId]);
+  }, [activeChatId]);
 
   useEffect(() => {
     if (!activeChatId) return;
@@ -76,7 +76,7 @@ export default function PhoneSimulator() {
     if (isNaN(id)) return;
     setActiveChatId(id);
     setMessages([]);
-    setLastMsgId(0);
+    lastMsgIdRef.current = 0;
     inputRef.current?.focus();
   };
 

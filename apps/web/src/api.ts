@@ -30,9 +30,9 @@ async function fetcher<T>(url: string, options?: RequestInit): Promise<T> {
   return apiFetch<T>(ADMIN_BASE, url, options);
 }
 
-// SWR-compatible fetcher — generic so useSWR<Data> types flow correctly
+// SWR-compatible fetcher — URL is passed as-is (already includes /api/admin or /api/bale prefix)
 export function swrFetcher<T>(url: string): Promise<T> {
-  return fetcher<T>(url);
+  return apiFetch<T>('', url);
 }
 
 // ── Stats ──
