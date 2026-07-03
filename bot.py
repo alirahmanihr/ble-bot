@@ -2687,9 +2687,7 @@ async def do_welcome(s, cid):
 async def cmd_start(s, cid):
     user = await db.get_user(cid)
     if user and user["role"]:
-        notifs = await db.get_unread_count(cid)
-        msg = f"🔔 {notifs} اعلان جدید دارید!" if notifs else ""
-        await show_menu(s, cid, user, msg)
+        await show_menu(s, cid, user)
     else:
         await _send_safe(
             s,
@@ -2878,38 +2876,34 @@ async def save_emp_profile(s, cid, data):
 
 
 def _calc_total_experience(experiences):
-    """محاسبه مجموع سال‌های تجربه از سوابق کاری و تبدیل به رشته قابل نمایش."""
+    """محاسبه مجموع سال‌های تجربه از سوابق کاری و تبدیل به یکی از مقادیر استاندارد EXPERIENCES.
+    خروجی باید با EXPERIENCES در database.py هماهنگ باشد تا match_score درست کار کند.
+    """
     total_months = 0
     for exp in experiences:
         dur = exp.get("duration", "")
         if not dur:
             continue
-        # Extract numbers + unit (سال/ماه)
         years_m = re.search(r"(\d+)\s*سال", dur)
         months_m = re.search(r"(\d+)\s*ماه", dur)
         if years_m:
             total_months += int(years_m.group(1)) * 12
         if months_m:
             total_months += int(months_m.group(1))
-        # Fallback: any number
         if not years_m and not months_m:
             nums = re.findall(r"\d+", dur)
             if nums:
                 total_months += int(nums[0]) * 12
-    years = total_months // 12
-    months = total_months % 12
-    if years == 0 and months == 0:
-        return "بدون سابقه"
-    if years == 0:
-        return f"{months} ماه"
-    if years < 3:
-        base = f"{years} سال"
-        if months > 0:
-            base += f" و {months} ماه"
-        return base
-    if years <= 5:
-        return "۳ تا ۵ سال"
-    return "بیش از ۵ سال"
+    # Map to standard EXPERIENCES buckets (same as database.EXPERIENCES)
+    if total_months == 0:
+        return EXPERIENCES[0]  # "بدون سابقه"
+    if total_months < 12:
+        return EXPERIENCES[1]  # "کمتر از ۱ سال"
+    if total_months < 36:
+        return EXPERIENCES[2]  # "۱ تا ۳ سال"
+    if total_months <= 60:
+        return EXPERIENCES[3]  # "۳ تا ۵ سال"
+    return EXPERIENCES[4]  # "بیش از ۵ سال"
 
 
 async def save_seeker_profile(s, cid, data):
