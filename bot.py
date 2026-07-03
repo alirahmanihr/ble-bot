@@ -902,8 +902,11 @@ async def handle_cmd(s, cid, text, data):
         uid = int(args[0]) if args[0].isdigit() else 0
         reason = " ".join(args[1:]) if len(args) > 1 else ""
         if uid:
-            await db.ban_user(uid, reason)
-            await api.send_message(s, cid, f"🚫 {uid} بن شد")
+            ok = await db.ban_user(uid, reason)
+            if ok:
+                await api.send_message(s, cid, f"🚫 {uid} بن شد")
+            else:
+                await api.send_message(s, cid, f"❌ کاربر {uid} یافت نشد")
     if cmd == "/unban" and args:
         uid = int(args[0]) if args[0].isdigit() else 0
         if uid:
@@ -2362,14 +2365,25 @@ async def on_cb(s, cb):
             return
         old = user["role"]
         new = "job_seeker" if old == "employer" else "employer"
-        if new == "employer" and user["emp_name"] and user["emp_phone"]:
+        if (
+            new == "employer"
+            and user["emp_name"]
+            and user["emp_phone"]
+            and user.get("emp_company")
+        ):
             await db.upsert_user(cid, role=new)
             await db.clear_state(cid)
             await add_activity_log(cid, "تغییر نقش", f"تغییر به کارفرما")
             user = await db.get_user(cid)
             await show_menu(s, cid, user, "✅ نقش شما با موفقیت به کارفرما تغییر کرد!")
             return
-        elif new == "job_seeker" and user["js_name"] and user["js_phone"]:
+        elif (
+            new == "job_seeker"
+            and user["js_name"]
+            and user["js_phone"]
+            and user.get("js_province")
+            and user.get("js_job_title")
+        ):
             await db.upsert_user(cid, role=new)
             await db.clear_state(cid)
             await add_activity_log(cid, "تغییر نقش", f"تغییر به کارجو")
@@ -2977,14 +2991,17 @@ async def finalize_application(s, cid, data):
     )
 
     if not aid:
+        user = await db.get_user(cid)
         if err == "duplicate":
-            await api.send_message(s, cid, "⚠️ قبلاً برای این آگهی رزومه ارسال کرده‌اید")
+            await _send_safe(s, cid, "⚠️ قبلاً برای این آگهی رزومه ارسال کرده‌اید")
         elif err == "rate_limit":
-            await api.send_message(
+            await _send_safe(
                 s, cid, "⚠️ تعداد رزومه‌های ارسالی بیش از حد مجاز است. لطفاً کمی صبر کنید."
             )
         else:
-            await api.send_message(s, cid, "❌ خطا - دوباره امتحان کنید")
+            await _send_safe(s, cid, "❌ خطا - دوباره امتحان کنید")
+        if user:
+            await show_menu(s, cid, user)
         return
 
     await db.clear_state(cid)
@@ -3216,11 +3233,11 @@ async def do_search(s, cid, data, page=0):
     user = await db.get_user(cid)
     if not jobs:
         await db.clear_state(cid)
-        await api.send_message(
+        await show_menu(
             s,
             cid,
+            user,
             "❌ *آگهی‌ای با این فیلترها یافت نشد*\n\nسعی کنید فیلترها را تغییر دهید.",
-            menu_for(user),
         )
         return
     await api.send_message(s, cid, f"✅ *{total} آگهی یافت شد:*")
@@ -3297,7 +3314,7 @@ async def do_search_seeker(s, cid, data, page=0):
     user = await db.get_user(cid)
     if not seekers:
         await db.clear_state(cid)
-        await api.send_message(s, cid, "❌ کارجویی یافت نشد", menu_for(user))
+        await show_menu(s, cid, user, "❌ کارجویی یافت نشد")
         return
     await api.send_message(s, cid, f"✅ *{total} کارجو یافت شد:*")
     for sk in seekers:
