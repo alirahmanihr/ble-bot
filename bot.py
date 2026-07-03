@@ -2837,14 +2837,14 @@ async def save_emp_basic(s, cid, position):
     await db.clear_state(cid)
     await add_activity_log(cid, "ثبت‌نام", "ثبت‌نام به‌عنوان کارفرما")
     user = await db.get_user(cid)
-    await api.send_message(
+    await _send_safe(
         s,
         cid,
         f"🎉 *ثبت‌نام کارفرما تکمیل شد!*\n\n{SLOGAN_EMP}\n\n"
         f"برای تکمیل پروفایل (آدرس، ایمیل، وب‌سایت) از دکمه تکمیل در مرحله بعد استفاده کنید.",
     )
     await db.set_state(cid, ER_ADDRESS)
-    await api.send_message(s, cid, "📍 آدرس محل کار (یا 0):", reply_kb([["🔙 بازگشت"]]))
+    await _send_safe(s, cid, "📍 آدرس محل کار (یا 0):", reply_kb([["🔙 بازگشت"]]))
 
 
 async def save_emp_profile(s, cid, data):
@@ -2857,7 +2857,7 @@ async def save_emp_profile(s, cid, data):
     await db.clear_state(cid)
     await add_activity_log(cid, "تکمیل پروفایل", "تکمیل پروفایل کارفرما")
     user = await db.get_user(cid)
-    await api.send_message(
+    await _send_safe(
         s,
         cid,
         f"✅ *پروفایل شما با موفقیت تکمیل شد!*\n\n"
@@ -2942,7 +2942,7 @@ async def save_seeker_profile(s, cid, data):
     ):
         cities = jlist(user.get("js_cities", "[]"))
         await _notify_employers_about_seeker(s, user, cities)
-    await api.send_message(
+    await _send_safe(
         s,
         cid,
         f"✅ *پروفایل شما با موفقیت تکمیل شد!*\n\n"
@@ -2994,7 +2994,7 @@ async def finalize_application(s, cid, data):
         exp_count = len(experiences)
         exp_msg = f" با {exp_count} سابقه کاری" if exp_count > 0 else " بدون سابقه کاری"
 
-        await api.send_message(
+        await _send_safe(
             s,
             cid,
             f"✅ *{THANKS}*\n\n"
@@ -3519,7 +3519,6 @@ async def adm_apps(s, cid, category=None):
             f"👤 *{app_dict['js_name']}*\n"
             f"📞 {app_dict['js_phone']}\n"
             f"📆 {app_dict['js_experience'] or '—'}\n"
-            f"{exp_text}\n"
             f"{exp_text}\n"
             f"💼 {app_dict['title']} | 🏷 {app_dict['category']}",
             inline(
