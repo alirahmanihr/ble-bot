@@ -636,6 +636,9 @@ async def is_banned(cid: int) -> bool:
 
 
 async def ban_user(cid: int, reason: str = "") -> bool:
+    user = await get_user(cid)
+    if not user:
+        return False
     return await upsert_user(cid, is_banned=1, ban_reason=reason)
 
 
