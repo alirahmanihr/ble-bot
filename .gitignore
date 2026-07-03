@@ -1,5 +1,6 @@
 .env
 hamrakar.db
 hamrakar.log
+test_hamrakar.db*
 __pycache__/
 *.pyc
