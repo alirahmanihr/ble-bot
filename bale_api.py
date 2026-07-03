@@ -5,6 +5,7 @@ Provides: send_message, edit_message_text, get_updates, inline/reply keyboards, 
 """
 
 import asyncio
+import json
 import aiohttp
 import logging
 import time
@@ -69,7 +70,13 @@ async def _post(
             async with s.post(
                 url, json=kw, timeout=aiohttp.ClientTimeout(total=60)
             ) as r:
-                body = await r.json()
+                try:
+                    body = await r.json()
+                except json.decoder.JSONDecodeError:
+                    body = {
+                        "ok": False,
+                        "description": f"Invalid JSON response (status {r.status})",
+                    }
                 if r.status >= 400:
                     log.error(
                         f"API {method} HTTP {r.status}: {body.get('description', body)}"
