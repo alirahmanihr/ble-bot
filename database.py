@@ -535,7 +535,9 @@ def _is_state_stale_sync(cid: int, ttl_minutes: int = 30) -> bool:
 
         try:
             updated = _dt.strptime(row[0], "%Y-%m-%d %H:%M:%S")
-            return _dt.utcnow() - updated > _td(minutes=ttl_minutes)
+            return _dt.now(_tz.utc).replace(tzinfo=None) - updated > _td(
+                minutes=ttl_minutes
+            )
         except Exception:
             return False
     finally:
@@ -1575,12 +1577,13 @@ def _get_matching_seekers_for_job_sync(
     conn = _c()
     try:
         sql = """SELECT chat_id FROM users WHERE role='job_seeker' AND is_banned=0
-                 AND private_mode=0 AND allow_employer_notify=1
-                 AND js_categories LIKE ? AND (js_province = ? OR js_cities LIKE ?)"""
+                 AND private_mode=0 AND allow_employer_notify=1 AND deleted_at IS NULL
+                 AND js_categories LIKE ? AND (js_province = ? OR js_cities LIKE ?"""
         params = [f'%"{category}"%', province, f'%"{province}"%']
         if city:
             sql += " OR js_cities LIKE ?"
             params.append(f'%"{city}"%')
+        sql += ")"
         rows = conn.execute(sql, params).fetchall()
         return to_dict_list(rows)
     finally:
@@ -1604,7 +1607,7 @@ def _get_matching_employers_for_seeker_sync(
     try:
         placeholders = ",".join(["?"] * len(categories))
         sql = f"""SELECT DISTINCT emp_cid FROM jobs WHERE status='active' AND admin_approved=1
-                 AND category IN ({placeholders}) AND (province = ?"""
+                 AND deleted_at IS NULL AND category IN ({placeholders}) AND (province = ?"""
         params = list(categories) + [province]
         if cities:
             sql += " OR province IN (" + ",".join(["?"] * len(cities)) + ")"
