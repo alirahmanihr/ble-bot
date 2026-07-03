@@ -29,6 +29,11 @@ try:
 
     def shamsi_dt() -> str:
         return jdatetime.datetime.now().strftime("%Y/%m/%d %H:%M")
+
+    def shamsi_future(days: int) -> str:
+        return (jdatetime.datetime.now() + jdatetime.timedelta(days=days)).strftime(
+            "%Y/%m/%d"
+        )
 except:
 
     def shamsi_now() -> str:
@@ -36,6 +41,9 @@ except:
 
     def shamsi_dt() -> str:
         return datetime.now().strftime("%Y/%m/%d %H:%M")
+
+    def shamsi_future(days: int) -> str:
+        return (datetime.now() + timedelta(days=days)).strftime("%Y/%m/%d")
 
 
 DB_PATH = Path(__file__).parent / "hamrakar.db"
@@ -726,7 +734,7 @@ def _create_job_sync(emp_cid: int, **fields):
         post_date=shamsi_now(),
         status="pending",
         admin_approved=0,
-        expiry_date=(datetime.now() + timedelta(days=30)).isoformat(),
+        expiry_date=shamsi_future(30),
     )
     conn = _c()
     try:
@@ -949,7 +957,8 @@ def _expire_old_jobs_sync():
     try:
         conn.execute("BEGIN TRANSACTION")
         conn.execute(
-            "UPDATE jobs SET status='expired' WHERE status='active' AND expiry_date < CURRENT_TIMESTAMP AND deleted_at IS NULL"
+            "UPDATE jobs SET status='expired' WHERE status='active' AND expiry_date < ? AND deleted_at IS NULL",
+            (shamsi_now(),),
         )
         conn.commit()
         return True
