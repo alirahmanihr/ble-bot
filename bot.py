@@ -719,10 +719,9 @@ def js_menu():
     return reply_kb(
         [
             ["🔍 جستجوی آگهی", "📊 درخواست‌های من"],
-            ["🔖 آگهی‌های ذخیره‌شده", "🔔 اعلان‌ها"],
-            ["📋 تاریخچه فعالیت", "✏️ ویرایش پروفایل"],
-            ["👤 پروفایل", "🔄 تغییر نقش"],
-            ["❓ راهنما"],
+            ["🔖 آگهی‌های ذخیره‌شده", "📋 تاریخچه فعالیت"],
+            ["✏️ ویرایش پروفایل", "👤 پروفایل"],
+            ["🔄 تغییر نقش", "❓ راهنما"],
         ]
     )
 
@@ -758,7 +757,9 @@ async def show_menu(s, cid, user, msg=""):
         t += f" | 🔔 {notifs} اعلان"
     if msg:
         t += f"\n\n{msg}"
-    await api.send_message(s, cid, t, menu_for(user))
+    sent = await _send_safe(s, cid, t, menu_for(user))
+    if not sent:
+        await _send_safe(s, cid, t, remove_kb())
 
 
 async def notify_admins(s, text, kb=None):
@@ -2498,6 +2499,8 @@ async def _send_safe(s, cid, text, kb=None):
         try:
             await api.send_message(s, cid, text, kb)
             return True
+        except asyncio.CancelledError:
+            return False
         except (RuntimeError, AttributeError, aiohttp.ClientError) as e:
             log.error(f"_send_safe to {cid}: session/client error — {e}")
             return False
@@ -2606,7 +2609,7 @@ async def _notify_employers_about_seeker(s, seeker, cities):
 # ==================== CORE FUNCTIONS ====================
 async def do_welcome(s, cid):
     await db.clear_state(cid)
-    await api.send_message(
+    await _send_safe(
         s,
         cid,
         f"🌟 *{BOT_NAME}*\n\n{SLOGAN}\n\n"
@@ -2624,7 +2627,7 @@ async def cmd_start(s, cid):
         msg = f"🔔 {notifs} اعلان جدید دارید!" if notifs else ""
         await show_menu(s, cid, user, msg)
     else:
-        await api.send_message(
+        await _send_safe(
             s,
             cid,
             f"📢 *{BOT_NAME}*\n\n"
@@ -3314,7 +3317,7 @@ async def my_notifs(s, cid):
 async def activity_log(s, cid):
     user = await db.get_user(cid)
     if not user:
-        await api.send_message(
+        await _send_safe(
             s,
             cid,
             "❌ شما ثبت‌نام کامل ندارید.\nلطفاً با /start ثبت‌نام را کامل کنید.",
@@ -3332,15 +3335,38 @@ async def activity_log(s, cid):
         all_items.append(
             {"type": a["action"], "detail": a["detail"], "date": a["created_at"]}
         )
-    all_items.sort(key=lambda x: x["date"], reverse=True)
+    all_items.sort(key=lambda x: x["date"] or "", reverse=True)
     if not all_items:
-        await api.send_message(s, cid, "📋 هنوز فعالیتی ندارید", menu_for(user))
+        await _send_safe(s, cid, "📋 هنوز فعالیتی ندارید", menu_for(user))
         return
     lines = ["📋 *تاریخچه فعالیت شما:*\n"]
     for item in all_items[:30]:
-        date_str = str(item["date"])[:16] if item["date"] else ""
-        lines.append(f"• {item['type']}: *{item['detail']}*\n  📅 {date_str}")
-    await api.send_message(s, cid, "\n\n".join(lines), menu_for(user))
+        date_obj = item["date"]
+        shamsi_date = ""
+        if date_obj:
+            try:
+                from jdatetime import datetime as jdt
+                from datetime import datetime as std_dt
+
+                if isinstance(date_obj, str):
+                    # Try common formats: Shamsi "%Y/%m/%d %H:%M" or Gregorian
+                    try:
+                        date_obj = std_dt.strptime(date_obj, "%Y/%m/%d %H:%M")
+                        shamsi_date = jdt.fromgregorian(datetime=date_obj).strftime(
+                            "%Y/%m/%d %H:%M"
+                        )
+                    except ValueError:
+                        shamsi_date = str(date_obj)[:16]
+                elif isinstance(date_obj, std_dt):
+                    shamsi_date = jdt.fromgregorian(datetime=date_obj).strftime(
+                        "%Y/%m/%d %H:%M"
+                    )
+                else:
+                    shamsi_date = str(date_obj)[:16]
+            except Exception:
+                shamsi_date = str(date_obj)[:16]
+        lines.append(f"• {item['type']}: *{item['detail']}*\n  📅 {shamsi_date}")
+    await _send_safe(s, cid, "\n\n".join(lines), menu_for(user))
 
 
 # ==================== ADMIN FUNCTIONS ====================
@@ -3540,6 +3566,13 @@ async def main():
         print("❌  فایل .env را باز کنید و BOT_TOKEN را وارد کنید!")
         print("=" * 50 + "\n")
         return
+
+    if not ADMIN_IDS:
+        log.warning("⚠️ ADMIN_IDS در فایل .env تنظیم نشده! پنل ادمین غیرفعال است.")
+        print("\n⚠️  هشدار: ADMIN_IDS در فایل .env تنظیم نشده است!")
+        print(
+            "   برای فعال‌سازی پنل ادمین، ADMIN_IDS=YourChatID را به .env اضافه کنید.\n"
+        )
 
     api.set_token(TOKEN)
     log.info("🔄 در حال راه‌اندازی دیتابیس...")
