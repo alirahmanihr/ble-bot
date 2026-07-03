@@ -464,6 +464,26 @@ async def handle_extended_cb(s, cid, d, mid, cbid, state, data) -> bool:
                 "🛠 مهارت‌های جدید:",
                 paginate(SKILLS_LIST, cur, "edit_skill_val", 0),
             )
+        elif field == "work_experiences":
+            experiences = await db.get_work_experiences(cid)
+            if experiences:
+                text = "📋 *سوابق کاری شما:*\n\n"
+                for i, exp in enumerate(experiences, 1):
+                    text += f"{i}. {exp['place']} | {exp['duration']} | {exp['role']}\n"
+                text += "\nبرای اضافه کردن سابقه جدید کلیک کنید:"
+            else:
+                text = "📋 هنوز سابقه کاری ثبت نکرده‌اید.\nبرای اضافه کردن کلیک کنید:"
+            await api.send_message(
+                s,
+                cid,
+                text,
+                inline(
+                    [
+                        [("➕ اضافه کردن سابقه", "add_work_exp")],
+                        [("🔙 بازگشت به ویرایش", "edit_js_menu")],
+                    ]
+                ),
+            )
         else:
             await db.set_state(cid, EDIT_JS_FIELD, {"edit_field": field})
             await api.send_message(
@@ -672,6 +692,17 @@ async def handle_extended_cb(s, cid, d, mid, cbid, state, data) -> bool:
             )
         return True
 
+    if d == "add_work_exp":
+        await db.set_state(cid, "ADD_WORK_EXP_PLACE")
+        await api.send_message(
+            s, cid, "🏢 نام شرکت/محل کار:", reply_kb([["🔙 بازگشت"]])
+        )
+        return True
+
+    if d == "edit_js_menu":
+        await edit_js_menu(s, cid)
+        return True
+
     return False
 
 
@@ -749,12 +780,9 @@ async def show_menu(s, cid, user, msg=""):
     if not user:
         await do_welcome(s, cid)
         return
-    notifs = await db.get_unread_count(cid)
     role_map = {"employer": "کارفرما", "job_seeker": "کارجو"}
     r = "ادمین" if cid in ADMIN_IDS else role_map.get(user["role"], "—")
     t = f"🏠 *{BOT_NAME}*\n👤 {r}"
-    if notifs:
-        t += f" | 🔔 {notifs} اعلان"
     if msg:
         t += f"\n\n{msg}"
     sent = await _send_safe(s, cid, t, menu_for(user))
@@ -1024,9 +1052,9 @@ async def handle_state(s, cid, state, data, text, doc, photos):
     # -------------------- تکمیل پروفایل کارجو --------------------
     elif state == JS_JOB:
         data["js_job_title"] = text
-        await db.set_state(cid, JS_EXP, data)
+        await db.set_state(cid, JS_EDU, data)
         await api.send_message(
-            s, cid, "📆 سطح تجربه:", inline([[(e, f"jsexp:{e}")] for e in EXPERIENCES])
+            s, cid, "🎓 تحصیلات:", inline([[(e, f"jsedu:{e}")] for e in EDUCATIONS])
         )
 
     elif state == JS_SAL:
@@ -1109,9 +1137,12 @@ async def handle_state(s, cid, state, data, text, doc, photos):
             await api.send_message(s, cid, "❌ توضیحات نباید بیش از ۲۰۰۰ کاراکتر باشد.")
             return
         data["job_desc"] = "" if text == "0" else text
-        await db.set_state(cid, JOB_CONTACT_EMAIL, data)
+        await db.set_state(cid, JOB_CONTACT_ADDRESS, data)
         await api.send_message(
-            s, cid, "📧 ایمیل (اختیاری - 0 برای رد):", reply_kb([["🔙 بازگشت"]])
+            s,
+            cid,
+            "📍 آدرس محل کار (0 = استفاده از آدرس پروفایل):",
+            reply_kb([["🔙 بازگشت"]]),
         )
 
     elif state == JOB_CONTACT_PHONE:
@@ -1120,16 +1151,12 @@ async def handle_state(s, cid, state, data, text, doc, photos):
             await api.send_message(s, cid, "❌ شماره تماس معتبر وارد کنید")
             return
         data["contact_phone"] = phone
-        await db.set_state(cid, JOB_CONTACT_EMAIL, data)
-        await api.send_message(
-            s, cid, "📧 ایمیل (اختیاری - 0 برای رد):", reply_kb([["🔙 بازگشت"]])
-        )
-
-    elif state == JOB_CONTACT_EMAIL:
-        data["contact_email"] = "" if text == "0" else text
         await db.set_state(cid, JOB_CONTACT_ADDRESS, data)
         await api.send_message(
-            s, cid, "📍 آدرس محل کار (اختیاری - 0 برای رد):", reply_kb([["🔙 بازگشت"]])
+            s,
+            cid,
+            "📍 آدرس محل کار (0 = استفاده از آدرس پروفایل):",
+            reply_kb([["🔙 بازگشت"]]),
         )
 
     elif state == JOB_CONTACT_ADDRESS:
@@ -1286,6 +1313,33 @@ async def handle_state(s, cid, state, data, text, doc, photos):
                 ]
             ),
         )
+
+    # -------------------- افزودن سابقه کاری از منوی ویرایش --------------------
+    elif state == "ADD_WORK_EXP_PLACE":
+        data["exp_place"] = text
+        await db.set_state(cid, "ADD_WORK_EXP_DURATION", data)
+        await api.send_message(
+            s, cid, "⏱ مدت زمان (مثال: ۲ سال، ۶ ماه):", reply_kb([["🔙 بازگشت"]])
+        )
+
+    elif state == "ADD_WORK_EXP_DURATION":
+        data["exp_duration"] = text
+        await db.set_state(cid, "ADD_WORK_EXP_ROLE", data)
+        await api.send_message(s, cid, "💼 سمت شغلی:", reply_kb([["🔙 بازگشت"]]))
+
+    elif state == "ADD_WORK_EXP_ROLE":
+        await db.add_work_experience(
+            cid, data.get("exp_place"), data.get("exp_duration"), text
+        )
+        await add_activity_log(cid, "افزودن سابقه", f"{data.get('exp_place')} - {text}")
+        # Recalculate total experience
+        experiences = await db.get_work_experiences(cid)
+        total_exp = _calc_total_experience(experiences) if experiences else ""
+        if total_exp:
+            await db.upsert_user(cid, js_experience=total_exp)
+        await db.clear_state(cid)
+        await api.send_message(s, cid, "✅ سابقه کاری اضافه شد!")
+        await edit_js_menu(s, cid)
 
     # -------------------- ادمین --------------------
     elif state == ADM_REJ_JOB:
@@ -2813,6 +2867,41 @@ async def save_emp_profile(s, cid, data):
     await show_menu(s, cid, user)
 
 
+def _calc_total_experience(experiences):
+    """محاسبه مجموع سال‌های تجربه از سوابق کاری و تبدیل به رشته قابل نمایش."""
+    total_months = 0
+    for exp in experiences:
+        dur = exp.get("duration", "")
+        if not dur:
+            continue
+        # Extract numbers + unit (سال/ماه)
+        years_m = re.search(r"(\d+)\s*سال", dur)
+        months_m = re.search(r"(\d+)\s*ماه", dur)
+        if years_m:
+            total_months += int(years_m.group(1)) * 12
+        if months_m:
+            total_months += int(months_m.group(1))
+        # Fallback: any number
+        if not years_m and not months_m:
+            nums = re.findall(r"\d+", dur)
+            if nums:
+                total_months += int(nums[0]) * 12
+    years = total_months // 12
+    months = total_months % 12
+    if years == 0 and months == 0:
+        return "بدون سابقه"
+    if years == 0:
+        return f"{months} ماه"
+    if years < 3:
+        base = f"{years} سال"
+        if months > 0:
+            base += f" و {months} ماه"
+        return base
+    if years <= 5:
+        return "۳ تا ۵ سال"
+    return "بیش از ۵ سال"
+
+
 async def save_seeker_profile(s, cid, data):
     js_cities = data.get("js_cities", [])
     if not isinstance(js_cities, list):
@@ -2823,11 +2912,14 @@ async def save_seeker_profile(s, cid, data):
     js_skills = data.get("js_skills", [])
     if not isinstance(js_skills, list):
         js_skills = []
+    # محاسبه مجموع تجربه از سوابق کاری
+    experiences = await db.get_work_experiences(cid)
+    total_exp = _calc_total_experience(experiences) if experiences else ""
     await db.upsert_user(
         cid,
         js_province=data.get("js_province"),
         js_job_title=data.get("js_job_title"),
-        js_experience=data.get("js_experience"),
+        js_experience=total_exp or data.get("js_experience", ""),
         js_education=data.get("js_education"),
         js_salary_min=data.get("js_salary_min", 0),
         js_dob=data.get("js_dob"),
@@ -2948,9 +3040,13 @@ async def finalize_job(s, cid, data):
     if not data.get("job_title") or not data.get("job_category"):
         await api.send_message(s, cid, "❌ اطلاعات ناقص است")
         return
-    # دریافت شماره تماس کارفرما از پروفایل
+    # دریافت شماره تماس و ایمیل کارفرما از پروفایل
     emp = await db.get_user(cid)
     emp_phone = emp["emp_phone"] if emp else ""
+    emp_email = emp.get("emp_email", "") if emp else ""
+    contact_address = data.get("contact_address")
+    if not contact_address:
+        contact_address = emp.get("emp_address", "") if emp else ""
     jid = await db.create_job(
         cid,
         title=data["job_title"],
@@ -2965,8 +3061,8 @@ async def finalize_job(s, cid, data):
         experience_need=data.get("job_experience"),
         description=data.get("job_desc"),
         contact_phone=emp_phone,
-        contact_email=data.get("contact_email"),
-        contact_address=data.get("contact_address"),
+        contact_email=emp_email,
+        contact_address=contact_address,
     )
     await db.clear_state(cid)
     await add_activity_log(cid, "ثبت آگهی", f"ثبت آگهی {data['job_title']}")
@@ -3130,7 +3226,12 @@ async def do_search(s, cid, data, page=0):
             f"💼 *{job_dict['title']}*\n"
             f"🏷 {job_dict['category']}\n"
             f"💰 {fmt_salary(job_dict.get('salary_min'), job_dict.get('salary_max'))}\n"
-            f"🗺 {job_dict.get('province') or '—'}\n"
+            f"🗺 {job_dict.get('province') or '—'} | {job_dict.get('city') or '—'}\n"
+            f"🤝 {job_dict.get('emp_type') or '—'}\n"
+            f"📞 {job_dict.get('contact_phone') or '—'}\n"
+            f"📧 {job_dict.get('contact_email') or '—'}\n"
+            f"📍 {job_dict.get('contact_address') or '—'}\n"
+            f"📝 {job_dict.get('description', '')[:300]}{'...' if len(job_dict.get('description', '')) > 300 else ''}\n"
             f"👁 {job_dict.get('views')} بازدید | 📅 {job_dict.get('post_date')}",
             inline(
                 [
@@ -3539,6 +3640,7 @@ async def edit_js_menu(s, cid):
                 ],
                 [("حقوق", "edit_js:js_salary_min"), ("درباره من", "edit_js:js_about")],
                 [("دسته‌ها", "edit_js:js_categories"), ("مهارت‌ها", "edit_js:js_skills")],
+                [("سوابق کاری", "edit_js:work_experiences")],
             ]
         ),
     )
