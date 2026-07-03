@@ -15,6 +15,11 @@ from typing import Optional, List, Dict, Any, Tuple
 
 log = logging.getLogger(__name__)
 
+# ==================== Rate Limiting ====================
+# In-memory rate limiter: max 5 resume submissions per 60s per user
+_rate_limit: Dict[int, list] = {}
+_rate_limit_lock = asyncio.Lock()
+
 # ==================== تاریخ شمسی ====================
 try:
     import jdatetime
@@ -173,6 +178,21 @@ def _c() -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA temp_store=MEMORY")
     return conn
+
+
+# ==================== SAFETY: Row → dict converters ====================
+def to_dict(row) -> Optional[Dict]:
+    """Convert sqlite3.Row → dict. Returns None for None input."""
+    if row is None:
+        return None
+    return dict(row)
+
+
+def to_dict_list(rows) -> List[Dict]:
+    """Convert list of sqlite3.Row → list of dict. Always returns list."""
+    if not rows:
+        return []
+    return [dict(r) for r in rows]
 
 
 def _get_schema_version(conn: sqlite3.Connection) -> int:
@@ -522,9 +542,10 @@ async def is_state_stale(cid: int, ttl_minutes: int = 30) -> bool:
 def _get_user_sync(cid: int):
     conn = _c()
     try:
-        return conn.execute(
+        row = conn.execute(
             "SELECT * FROM users WHERE chat_id=? AND deleted_at IS NULL", (cid,)
         ).fetchone()
+        return to_dict(row)
     finally:
         conn.close()
 
@@ -539,20 +560,21 @@ def _get_user_by_phone_sync(phone: str, role: Optional[str] = None):
     conn = _c()
     try:
         if role == "employer":
-            return conn.execute(
+            row = conn.execute(
                 "SELECT * FROM users WHERE emp_phone=? AND role='employer' AND deleted_at IS NULL",
                 (phone,),
             ).fetchone()
         elif role == "job_seeker":
-            return conn.execute(
+            row = conn.execute(
                 "SELECT * FROM users WHERE js_phone=? AND role='job_seeker' AND deleted_at IS NULL",
                 (phone,),
             ).fetchone()
         else:
-            return conn.execute(
+            row = conn.execute(
                 "SELECT * FROM users WHERE (emp_phone=? OR js_phone=?) AND deleted_at IS NULL",
                 (phone, phone),
             ).fetchone()
+        return to_dict(row)
     finally:
         conn.close()
 
@@ -617,13 +639,15 @@ def _get_all_users_sync(role: Optional[str] = None):
     conn = _c()
     try:
         if role:
-            return conn.execute(
+            rows = conn.execute(
                 "SELECT chat_id FROM users WHERE role=? AND is_banned=0 AND deleted_at IS NULL",
                 (role,),
             ).fetchall()
-        return conn.execute(
-            "SELECT chat_id FROM users WHERE is_banned=0 AND deleted_at IS NULL"
-        ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT chat_id FROM users WHERE is_banned=0 AND deleted_at IS NULL"
+            ).fetchall()
+        return to_dict_list(rows)
     finally:
         conn.close()
 
@@ -635,10 +659,11 @@ async def get_all_users(role: Optional[str] = None):
 def _get_users_by_category_sync(category: str):
     conn = _c()
     try:
-        return conn.execute(
+        rows = conn.execute(
             "SELECT chat_id FROM users WHERE role='job_seeker' AND is_banned=0 AND private_mode=0 AND allow_employer_notify=1 AND js_categories LIKE ? AND deleted_at IS NULL",
             (f'%"{category}"%',),
         ).fetchall()
+        return to_dict_list(rows)
     finally:
         conn.close()
 
@@ -652,6 +677,13 @@ def _add_work_experience_sync(user_chat_id: int, place: str, duration: str, role
     conn = _c()
     try:
         conn.execute("BEGIN TRANSACTION")
+        existing = conn.execute(
+            "SELECT exp_id FROM work_experiences WHERE user_chat_id=? AND place=? AND duration=? AND role=? AND deleted_at IS NULL",
+            (user_chat_id, place, duration, role),
+        ).fetchone()
+        if existing:
+            conn.commit()
+            return True
         conn.execute(
             "INSERT INTO work_experiences(user_chat_id, place, duration, role) VALUES(?,?,?,?)",
             (user_chat_id, place, duration, role),
@@ -722,9 +754,10 @@ async def create_job(emp_cid: int, **fields):
 def _get_job_sync(jid: int):
     conn = _c()
     try:
-        return conn.execute(
+        row = conn.execute(
             "SELECT * FROM jobs WHERE job_id=? AND deleted_at IS NULL", (jid,)
         ).fetchone()
+        return to_dict(row)
     finally:
         conn.close()
 
@@ -744,7 +777,7 @@ def _get_employer_jobs_sync(emp_cid: int, page: int = 0, per: int = 10):
             "SELECT * FROM jobs WHERE emp_cid=? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ? OFFSET ?",
             (emp_cid, per, page * per),
         ).fetchall()
-        return rows, total
+        return to_dict_list(rows), total
     finally:
         conn.close()
 
@@ -765,7 +798,8 @@ def _get_pending_jobs_sync(category: Optional[str] = None):
             sql += " AND j.category=?"
             params.append(category)
         sql += " ORDER BY j.created_at LIMIT 50"
-        return conn.execute(sql, params).fetchall()
+        rows = conn.execute(sql, params).fetchall()
+        return to_dict_list(rows)
     finally:
         conn.close()
 
@@ -974,7 +1008,7 @@ def _search_jobs_sync(
         sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
         params += [per, page * per]
         rows = conn.execute(sql, params).fetchall()
-        return rows, total
+        return to_dict_list(rows), total
     finally:
         conn.close()
 
@@ -991,7 +1025,9 @@ async def search_jobs(
 def _search_seekers_sync(
     category: Optional[str] = None,
     province: Optional[str] = None,
+    city: Optional[str] = None,
     experience: Optional[str] = None,
+    salary_min: Optional[int] = None,
     page: int = 0,
     per: int = 10,
 ):
@@ -1005,16 +1041,22 @@ def _search_seekers_sync(
         if province and province not in ("همه", ""):
             sql += " AND (js_province=? OR js_cities LIKE ?)"
             params += [province, f"%{province}%"]
+        if city and city not in ("همه", ""):
+            sql += " AND (js_cities LIKE ?)"
+            params.append(f"%{city}%")
         if experience and experience != "همه":
             sql += " AND js_experience=?"
             params.append(experience)
+        if salary_min and salary_min > 0:
+            sql += " AND js_salary_min >= ?"
+            params.append(salary_min)
         total = conn.execute(
             sql.replace("SELECT *", "SELECT COUNT(*)"), params
         ).fetchone()[0]
-        sql += " ORDER BY rating DESC, created_at DESC LIMIT ? OFFSET ?"
+        sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
         params += [per, page * per]
         rows = conn.execute(sql, params).fetchall()
-        return rows, total
+        return to_dict_list(rows), total
     finally:
         conn.close()
 
@@ -1022,12 +1064,21 @@ def _search_seekers_sync(
 async def search_seekers(
     category: Optional[str] = None,
     province: Optional[str] = None,
+    city: Optional[str] = None,
     experience: Optional[str] = None,
+    salary_min: Optional[int] = None,
     page: int = 0,
     per: int = 10,
 ):
     return await _run_db(
-        _search_seekers_sync, category, province, experience, page, per
+        _search_seekers_sync,
+        category,
+        province,
+        city,
+        experience,
+        salary_min,
+        page,
+        per,
     )
 
 
@@ -1096,6 +1147,15 @@ async def create_application(
     file_size: int = 0,
     idempotency_key: Optional[str] = None,
 ):
+    # Rate limit: max 5 applications per 60 seconds per user
+    async with _rate_limit_lock:
+        now = time.time()
+        times = _rate_limit.get(seeker_cid, [])
+        times = [t for t in times if now - t < 60]
+        if len(times) >= 5:
+            return None, "rate_limit"
+        times.append(now)
+        _rate_limit[seeker_cid] = times
     return await _run_db(
         _create_application_sync,
         job_id,
@@ -1111,7 +1171,7 @@ async def create_application(
 def _get_application_sync(aid: int):
     conn = _c()
     try:
-        return conn.execute(
+        row = conn.execute(
             "SELECT a.*, u.js_name, u.js_phone, u.js_province, u.js_experience, u.js_education, "
             "u.js_categories, u.js_skills, u.rating AS seeker_rating, u.js_about, "
             "j.title, j.category, j.emp_cid "
@@ -1121,6 +1181,7 @@ def _get_application_sync(aid: int):
             "WHERE a.app_id=? AND a.deleted_at IS NULL AND u.deleted_at IS NULL AND j.deleted_at IS NULL",
             (aid,),
         ).fetchone()
+        return to_dict(row)
     finally:
         conn.close()
 
@@ -1140,7 +1201,8 @@ def _get_pending_applications_sync(category: Optional[str] = None):
             sql += " AND j.category=?"
             params.append(category)
         sql += " ORDER BY a.created_at LIMIT 50"
-        return conn.execute(sql, params).fetchall()
+        rows = conn.execute(sql, params).fetchall()
+        return to_dict_list(rows)
     finally:
         conn.close()
 
@@ -1152,12 +1214,13 @@ async def get_pending_applications(category: Optional[str] = None):
 def _get_job_applications_sync(job_id: int):
     conn = _c()
     try:
-        return conn.execute(
+        rows = conn.execute(
             "SELECT a.*, u.js_name, u.js_phone, u.js_experience, u.rating AS seeker_rating FROM applications a "
             "JOIN users u ON a.seeker_cid=u.chat_id WHERE a.job_id=? AND a.deleted_at IS NULL AND u.deleted_at IS NULL "
             "ORDER BY a.created_at DESC",
             (job_id,),
         ).fetchall()
+        return to_dict_list(rows)
     finally:
         conn.close()
 
@@ -1169,11 +1232,12 @@ async def get_job_applications(job_id: int):
 def _get_seeker_applications_sync(seeker_cid: int):
     conn = _c()
     try:
-        return conn.execute(
+        rows = conn.execute(
             "SELECT a.*, j.title, j.category, j.province FROM applications a JOIN jobs j ON a.job_id=j.job_id "
             "WHERE a.seeker_cid=? AND a.deleted_at IS NULL AND j.deleted_at IS NULL ORDER BY a.created_at DESC LIMIT 50",
             (seeker_cid,),
         ).fetchall()
+        return to_dict_list(rows)
     finally:
         conn.close()
 
@@ -1269,6 +1333,27 @@ async def update_application_by_admin(aid: int, admin_cid: int, **fields) -> boo
     return await _run_db(_update_application_by_admin_sync, aid, admin_cid, **fields)
 
 
+def _update_application_status_sync(aid: int, status: str):
+    conn = _c()
+    try:
+        conn.execute("BEGIN TRANSACTION")
+        conn.execute(
+            "UPDATE applications SET status=? WHERE app_id=? AND deleted_at IS NULL",
+            (status, aid),
+        )
+        conn.commit()
+        return True
+    except:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+async def update_application_status(aid: int, status: str) -> bool:
+    return await _run_db(_update_application_status_sync, aid, status)
+
+
 def _has_applied_sync(job_id: int, seeker_cid: int):
     conn = _c()
     try:
@@ -1332,10 +1417,11 @@ async def remove_bookmark(user_cid: int, job_id: int) -> bool:
 def _get_bookmarks_sync(user_cid: int):
     conn = _c()
     try:
-        return conn.execute(
+        rows = conn.execute(
             "SELECT j.* FROM bookmarks b JOIN jobs j ON b.job_id=j.job_id WHERE b.user_cid=? AND b.deleted_at IS NULL AND j.deleted_at IS NULL ORDER BY b.created_at DESC LIMIT 20",
             (user_cid,),
         ).fetchall()
+        return to_dict_list(rows)
     finally:
         conn.close()
 
@@ -1458,7 +1544,7 @@ def _get_notifications_sync(user_cid: int):
             (user_cid,),
         )
         conn.commit()
-        return rows
+        return to_dict_list(rows)
     except:
         conn.rollback()
         return []
@@ -1483,7 +1569,8 @@ def _get_matching_seekers_for_job_sync(
         if city:
             sql += " OR js_cities LIKE ?"
             params.append(f'%"{city}"%')
-        return conn.execute(sql, params).fetchall()
+        rows = conn.execute(sql, params).fetchall()
+        return to_dict_list(rows)
     finally:
         conn.close()
 
@@ -1682,9 +1769,10 @@ async def get_stats():
 def _get_admin_logs_sync(limit: int = 20):
     conn = _c()
     try:
-        return conn.execute(
+        rows = conn.execute(
             "SELECT * FROM admin_logs ORDER BY created_at DESC LIMIT ?", (limit,)
         ).fetchall()
+        return to_dict_list(rows)
     finally:
         conn.close()
 
@@ -1721,10 +1809,11 @@ async def add_activity_log(
 def _get_activity_log_sync(user_cid: int, limit: int = 30):
     conn = _c()
     try:
-        return conn.execute(
+        rows = conn.execute(
             "SELECT * FROM activity_logs WHERE user_cid=? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ?",
             (user_cid, limit),
         ).fetchall()
+        return to_dict_list(rows)
     finally:
         conn.close()
 
@@ -1794,12 +1883,21 @@ def stars(rating, count: int = 0) -> str:
 
 
 def jlist(text) -> List:
-    if not text:
+    """Safely parse JSON string to list. Handles None, str, list/tuple inputs."""
+    if text is None:
         return []
-    try:
-        return json.loads(text)
-    except:
-        return []
+    if isinstance(text, (list, tuple)):
+        return list(text)
+    if isinstance(text, str):
+        text = text.strip()
+        if not text:
+            return []
+        try:
+            result = json.loads(text)
+            return list(result) if isinstance(result, list) else [result]
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return []
 
 
 def days_since(date_str: str) -> int:
