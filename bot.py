@@ -2126,24 +2126,17 @@ async def on_cb(s, cb):
                 await api.send_message(s, CHANNEL_2, channel_text)
             except Exception as e:
                 log.error(f"انتشار در کانال: {e}")
-            if job:
-                task = asyncio.create_task(_notify_seekers_job(s, dict(job)))
-                task.add_done_callback(
-                    lambda t: (
-                        log.error(
-                            f"notify_seekers_job error: {t.exception()}", exc_info=True
-                        )
-                        if t.exception()
-                        else None
+            task = asyncio.create_task(_notify_seekers_job(s, dict(job)))
+            task.add_done_callback(
+                lambda t: (
+                    log.error(
+                        f"notify_seekers_job error: {t.exception()}", exc_info=True
                     )
+                    if t.exception()
+                    else None
                 )
+            )
             await adm_jobs(s, cid)
-        return
-
-    if d.startswith("admreject:"):
-        jid = int(d.split(":")[1])
-        await db.set_state(cid, ADM_REJ_JOB, {"reject_job_id": jid})
-        await api.send_message(s, cid, "✍️ دلیل رد آگهی:", reply_kb([["🔙 بازگشت"]]))
         return
 
     if d.startswith("adm_edit_job:"):
@@ -2181,7 +2174,39 @@ async def on_cb(s, cb):
             )
         return
 
+    if d.startswith("admrejectapp:"):
+        aid = int(d.split(":")[1])
+        await db.set_state(cid, ADM_REJ_APP, {"reject_app_id": aid})
+        await api.send_message(s, cid, "✍️ دلیل رد رزومه:", reply_kb([["🔙 بازگشت"]]))
+        return
+
+    if d.startswith("admreject:"):
+        jid = int(d.split(":")[1])
+        await db.set_state(cid, ADM_REJ_JOB, {"reject_job_id": jid})
+        await api.send_message(s, cid, "✍️ دلیل رد آگهی:", reply_kb([["🔙 بازگشت"]]))
+        return
+
     # -------------------- ادمین تأیید رزومه --------------------
+    if d.startswith("adm_edit_app:"):
+        parts = d.split(":")
+        if len(parts) >= 3:
+            aid = int(parts[1])
+            field = parts[2]
+            await db.set_state(
+                cid, ADM_EDIT_APP, {"edit_app_id": aid, "edit_field": field}
+            )
+            labels = {
+                "cover_letter": "معرفی جدید",
+                "resume_file": "فایل جدید (file_id)",
+            }
+            await api.send_message(
+                s,
+                cid,
+                f"✏️ {labels.get(field, field)} را وارد کنید:",
+                reply_kb([["🔙 بازگشت"]]),
+            )
+        return
+
     if d.startswith("admapp:"):
         parts = d.split(":")
         if len(parts) >= 2:
@@ -2260,32 +2285,6 @@ async def on_cb(s, cb):
                 except Exception as e:
                     log.error(f"admapp send: {e}")
                 await adm_apps(s, cid)
-        return
-
-    if d.startswith("admrejectapp:"):
-        aid = int(d.split(":")[1])
-        await db.set_state(cid, ADM_REJ_APP, {"reject_app_id": aid})
-        await api.send_message(s, cid, "✍️ دلیل رد رزومه:", reply_kb([["🔙 بازگشت"]]))
-        return
-
-    if d.startswith("adm_edit_app:"):
-        parts = d.split(":")
-        if len(parts) >= 3:
-            aid = int(parts[1])
-            field = parts[2]
-            await db.set_state(
-                cid, ADM_EDIT_APP, {"edit_app_id": aid, "edit_field": field}
-            )
-            labels = {
-                "cover_letter": "معرفی جدید",
-                "resume_file": "فایل جدید (file_id)",
-            }
-            await api.send_message(
-                s,
-                cid,
-                f"✏️ {labels.get(field, field)} را وارد کنید:",
-                reply_kb([["🔙 بازگشت"]]),
-            )
         return
 
     # -------------------- کارفرما: تأیید یا رد رزومه --------------------
