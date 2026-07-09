@@ -14,22 +14,137 @@ from typing import Any, Dict, List, Optional, Tuple
 log = logging.getLogger(__name__)
 _BASE = ""
 _BOT_USERNAME = ""
+_PLATFORM = "bale"  # current active platform name
 
-# ── Rate limiting for send_message (simple token bucket) ──
-_MSG_LAST = 0.0
+# ── Multi-provider session registry ──
+_provider_sessions: Dict[str, aiohttp.ClientSession] = {}
+_provider_bases: Dict[str, str] = {}
+
+
+def register_provider(platform: str, session: aiohttp.ClientSession, base_url: str):
+    """Register a provider's session for cross-platform message routing."""
+    _provider_sessions[platform] = session
+    _provider_bases[platform] = base_url
+
+
+def unregister_provider(platform: str):
+    """Remove a provider from the registry."""
+    _provider_sessions.pop(platform, None)
+    _provider_bases.pop(platform, None)
+
+
+def get_provider_session(platform: str):
+    """Get session for a specific platform (used for cross-platform sends)."""
+    return _provider_sessions.get(platform)
+
+
+def get_all_providers():
+    """Return list of (platform_name, session, base_url) for all registered providers."""
+    result = []
+    for platform, session in _provider_sessions.items():
+        base_url = _provider_bases.get(platform, "")
+        result.append((platform, session, base_url))
+    return result
+
+
+async def send_to_all_providers(cid, text, reply_markup=None):
+    """Send a message to a chat ID via ALL registered providers.
+    Used for channel publishing where the same @channel exists on Bale and Telegram.
+
+    Returns list of (platform, ok) tuples.
+    """
+    global _BASE
+    results = []
+    for platform, session, base_url in get_all_providers():
+        saved_base = _BASE
+        try:
+            _BASE = base_url
+            resp = await send_message(session, cid, text, reply_markup)
+            results.append((platform, resp.get("ok", False)))
+        except Exception as e:
+            log.error(f"send_to_all_providers [{platform}] to {cid}: {e}")
+            results.append((platform, False))
+        finally:
+            _BASE = saved_base
+    return results
+
+
+# ── Rate limiting for send_message (per-provider token buckets) ──
+_MSG_LAST: Dict[str, float] = {}
 _MSG_MIN_INTERVAL = 0.05  # 50ms between sends (~20 msg/s max)
 
 
-def set_token(t: str) -> None:
+def _get_rate_limit_key() -> str:
+    """Return a rate-limit key based on current active BASE URL."""
+    return _BASE or "default"
+
+
+def set_token(t: str, base_url: str = "https://tapi.bale.ai/bot") -> None:
     """Store the bot token and build the base API URL."""
     global _BASE
-    _BASE = f"https://tapi.bale.ai/bot{t}"
+    _BASE = f"{base_url}{t}"
 
 
 def set_bot_username(u: str) -> None:
     """Store the bot username for generating share links."""
     global _BOT_USERNAME
     _BOT_USERNAME = u
+
+
+def set_platform(p: str) -> None:
+    """Set current active platform name (bale/telegram)."""
+    global _PLATFORM
+    _PLATFORM = p
+
+
+def get_platform() -> str:
+    """Get current active platform name."""
+    return _PLATFORM
+
+
+async def send_to_user(
+    cid: int,
+    text: str,
+    reply_markup=None,
+    user_platform: str = None,
+    default_session=None,
+):
+    """Send message to a user, routing to the correct provider based on their platform.
+
+    Args:
+        cid: Target chat ID.
+        text: Message text.
+        reply_markup: Keyboard markup.
+        user_platform: The user's platform ('bale' or 'telegram'). If None, uses current provider.
+        default_session: Fallback session if provider-specific one isn't available.
+
+    Returns:
+        API response dict.
+    """
+    # Determine which session to use
+    session = None
+    if user_platform and user_platform in _provider_sessions:
+        session = _provider_sessions[user_platform]
+    elif default_session is not None:
+        session = default_session
+    else:
+        # Fallback: use first available provider session
+        for s in _provider_sessions.values():
+            session = s
+            break
+
+    if session is None:
+        return {"ok": False, "description": "No provider session available"}
+
+    # Temporarily switch BASE to the target platform
+    global _BASE
+    saved_base = _BASE
+    try:
+        if user_platform and user_platform in _provider_bases:
+            _BASE = _provider_bases[user_platform]
+        return await send_message(session, cid, text, reply_markup)
+    finally:
+        _BASE = saved_base
 
 
 def get_bot_username() -> str:
@@ -145,13 +260,15 @@ async def send_message(
     Returns:
         API response dict.
     """
-    # Simple token bucket: enforce minimum interval between sends
+    # Per-provider token bucket: enforce minimum interval between sends
     global _MSG_LAST
+    key = _get_rate_limit_key()
     now = time.monotonic()
-    elapsed = now - _MSG_LAST
+    last = _MSG_LAST.get(key, 0.0)
+    elapsed = now - last
     if elapsed < _MSG_MIN_INTERVAL:
         await asyncio.sleep(_MSG_MIN_INTERVAL - elapsed)
-    _MSG_LAST = time.monotonic()
+    _MSG_LAST[key] = time.monotonic()
 
     return await _post(
         s,

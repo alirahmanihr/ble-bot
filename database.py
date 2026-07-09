@@ -48,7 +48,7 @@ except:
 
 DB_PATH = Path(__file__).parent / "hamrakar.db"
 _db_lock = asyncio.Lock()
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # ==================== CONSTANTS ====================
 INDUSTRIES = [
@@ -370,6 +370,24 @@ def _run_migrations(conn: sqlite3.Connection, current_version: int) -> None:
             conn.execute(idx)
         _set_schema_version(conn, 3)
 
+    if current_version < 4:
+        # Add linked_chat_id for cross-platform account linking (Bale ↔ Telegram)
+        try:
+            cols = [c[1] for c in conn.execute("PRAGMA table_info(users)").fetchall()]
+            if "linked_chat_id" not in cols:
+                conn.execute(
+                    "ALTER TABLE users ADD COLUMN linked_chat_id INTEGER DEFAULT NULL"
+                )
+                log.info("  ✅ added linked_chat_id to users")
+            if "platform" not in cols:
+                conn.execute(
+                    "ALTER TABLE users ADD COLUMN platform TEXT DEFAULT 'bale'"
+                )
+                log.info("  ✅ added platform to users")
+        except Exception as e:
+            log.warning(f"  ⚠️ v4 migration: {e}")
+        _set_schema_version(conn, 4)
+
 
 # ==================== ASYNC DB WRAPPER ====================
 async def _run_db(fn, *args, **kwargs):
@@ -417,6 +435,8 @@ def _repair_schema(conn: sqlite3.Connection):
             "js_categories": "TEXT DEFAULT '[]'",
             "js_skills": "TEXT DEFAULT '[]'",
             "work_experience": "TEXT DEFAULT '[]'",
+            "linked_chat_id": "INTEGER DEFAULT NULL",
+            "platform": "TEXT DEFAULT 'bale'",
         }
         for col_name, col_def in needed.items():
             if col_name not in cols:
@@ -564,6 +584,266 @@ async def get_user(cid: int):
     return await _run_db(_get_user_sync, cid)
 
 
+def _resolve_linked_cids_sync(conn, cid: int):
+    """Return all chat_ids linked to this user (self + linked accounts).
+    Supports up to 2 levels of linking (Bale ↔ Telegram)."""
+    cids = [cid]
+    row = conn.execute(
+        "SELECT linked_chat_id FROM users WHERE chat_id=? AND deleted_at IS NULL",
+        (cid,),
+    ).fetchone()
+    if row and row[0]:
+        linked = row[0]
+        if linked not in cids:
+            cids.append(linked)
+        # Check if the linked account also links back
+        row2 = conn.execute(
+            "SELECT linked_chat_id FROM users WHERE chat_id=? AND deleted_at IS NULL",
+            (linked,),
+        ).fetchone()
+        if row2 and row2[0] and row2[0] not in cids:
+            cids.append(row2[0])
+    # Also check if anyone links TO this user
+    rows = conn.execute(
+        "SELECT chat_id FROM users WHERE linked_chat_id=? AND deleted_at IS NULL",
+        (cid,),
+    ).fetchall()
+    for r in rows:
+        if r[0] not in cids:
+            cids.append(r[0])
+    return cids
+
+
+def _link_users_by_phone_sync(cid: int, phone: str, platform: str):
+    """Link new registration to existing user with same phone on another platform.
+    Also syncs profile data from the existing account to fill empty fields in the new one."""
+    if not phone:
+        return None
+    conn = _c()
+    try:
+        # Find existing user with same phone on a different platform
+        existing = conn.execute(
+            "SELECT chat_id, platform FROM users WHERE (emp_phone=? OR js_phone=?) AND chat_id!=? AND deleted_at IS NULL",
+            (phone, phone, cid),
+        ).fetchone()
+        if not existing:
+            return None
+        other_cid, other_platform = existing[0], existing[1]
+        if other_platform == platform:
+            return None  # same platform, no need to link
+        # Link both ways
+        conn.execute("BEGIN TRANSACTION")
+        conn.execute(
+            "UPDATE users SET linked_chat_id=?, platform=? WHERE chat_id=?",
+            (other_cid, platform, cid),
+        )
+        conn.execute(
+            "UPDATE users SET linked_chat_id=? WHERE chat_id=? AND linked_chat_id IS NULL",
+            (cid, other_cid),
+        )
+        # Sync profile data: copy non-empty fields from existing account to new account
+        _sync_profile_data(conn, other_cid, cid)
+        # Also sync in reverse (new → existing) if new account has data existing lacks
+        _sync_profile_data(conn, cid, other_cid)
+        conn.commit()
+        log.info(f"🔗 Linked {platform}:{cid} ↔ {other_platform}:{other_cid} via phone")
+        return other_cid
+    except Exception as e:
+        log.warning(f"link_users_by_phone error: {e}")
+        try:
+            conn.rollback()
+        except:
+            pass
+        return None
+    finally:
+        conn.close()
+
+
+def _sync_profile_data(conn: sqlite3.Connection, from_cid: int, to_cid: int):
+    """Copy essential profile fields from from_cid to to_cid, only filling empty/default fields."""
+    # Fields to sync with their default/empty values
+    field_defaults = {
+        # Employer fields
+        "emp_name": "",
+        "emp_company": "",
+        "emp_industry": "",
+        "emp_position": "",
+        "emp_address": "",
+        "emp_email": "",
+        "emp_website": "",
+        # Seeker fields
+        "js_name": "",
+        "js_province": "",
+        "js_job_title": "",
+        "js_experience": "",
+        "js_education": "",
+        "js_gender": "",
+        "js_relocate": "",
+        "js_about": "",
+        "js_salary_min": 0,
+        "js_dob": "",
+        "js_categories": "[]",
+        "js_skills": "[]",
+        "js_cities": "[]",
+        # Shared
+        "reg_date": "",
+        "resume_complete": 0,
+        "allow_employer_notify": 0,
+    }
+
+    source = conn.execute(
+        "SELECT * FROM users WHERE chat_id=? AND deleted_at IS NULL", (from_cid,)
+    ).fetchone()
+    target = conn.execute(
+        "SELECT * FROM users WHERE chat_id=? AND deleted_at IS NULL", (to_cid,)
+    ).fetchone()
+
+    if not source or not target:
+        return
+
+    updates = {}
+    for field, default in field_defaults.items():
+        if field not in source.keys():
+            continue
+        src_val = source[field]
+        tgt_val = target[field] if field in target.keys() else default
+        # Only copy if source has meaningful data AND target is empty/default
+        src_is_empty = src_val is None or src_val == default or src_val == ""
+        tgt_is_empty = tgt_val is None or tgt_val == default or tgt_val == ""
+        if not src_is_empty and tgt_is_empty:
+            updates[field] = src_val
+
+    # Also sync role if target has no role
+    if not target["role"] and source["role"]:
+        updates["role"] = source["role"]
+
+    if updates:
+        set_clause = ", ".join(f"{k}=?" for k in updates)
+        conn.execute(
+            f"UPDATE users SET {set_clause} WHERE chat_id=?",
+            list(updates.values()) + [to_cid],
+        )
+        log.info(
+            f"  📋 Synced {len(updates)} fields {from_cid}→{to_cid}: {list(updates.keys())}"
+        )
+
+
+# Fields that represent user profile data and should be mirrored between linked accounts.
+# These exclude: chat_id, linked_chat_id, platform, deleted_at, last_active, created_at,
+# is_banned, ban_reason, emp_gender_need, emp_age_min, emp_age_max.
+_PROFILE_SYNC_FIELDS = [
+    # Note: emp_phone and js_phone are excluded — they have UNIQUE constraints
+    # and serve as the linking key, not data to replicate across accounts.
+    "role",
+    "emp_name",
+    "emp_company",
+    "emp_industry",
+    "emp_position",
+    "emp_address",
+    "emp_email",
+    "emp_website",
+    "js_name",
+    "js_province",
+    "js_job_title",
+    "js_experience",
+    "js_education",
+    "js_salary_min",
+    "js_salary_max",
+    "js_dob",
+    "js_gender",
+    "js_relocate",
+    "js_cities",
+    "js_categories",
+    "js_skills",
+    "js_about",
+    "work_experience",
+    "allow_employer_notify",
+    "resume_complete",
+    "reg_date",
+    "rating",
+    "rating_count",
+    "private_mode",
+]
+
+
+def _sync_profile_to_linked(conn: sqlite3.Connection, from_cid: int):
+    """Push all profile fields from from_cid to any linked accounts.
+    Uses direct UPDATE (not upsert_user) to avoid recursive sync loops.
+    Only pushes fields that have meaningful (non-empty/non-default) values."""
+    # Find linked accounts in both directions
+    linked_cids = []
+    row = conn.execute(
+        "SELECT linked_chat_id FROM users WHERE chat_id=? AND deleted_at IS NULL",
+        (from_cid,),
+    ).fetchone()
+    if row and row[0]:
+        linked_cids.append(row[0])
+    rows = conn.execute(
+        "SELECT chat_id FROM users WHERE linked_chat_id=? AND deleted_at IS NULL",
+        (from_cid,),
+    ).fetchall()
+    for r in rows:
+        if r[0] not in linked_cids:
+            linked_cids.append(r[0])
+    if not linked_cids:
+        return
+
+    source = conn.execute(
+        "SELECT * FROM users WHERE chat_id=? AND deleted_at IS NULL", (from_cid,)
+    ).fetchone()
+    if not source:
+        return
+
+    for target_cid in linked_cids:
+        # Verify target exists
+        target_exists = conn.execute(
+            "SELECT 1 FROM users WHERE chat_id=? AND deleted_at IS NULL", (target_cid,)
+        ).fetchone()
+        if not target_exists:
+            continue
+
+        updates = {}
+        for field in _PROFILE_SYNC_FIELDS:
+            if field not in source.keys():
+                continue
+            src_val = source[field]
+            # Only push non-empty, meaningful values
+            if src_val is None:
+                continue
+            if isinstance(src_val, str) and src_val in ("", "[]"):
+                continue
+            if (
+                isinstance(src_val, (int, float))
+                and src_val == 0
+                and field
+                not in (
+                    "js_salary_min",
+                    "js_salary_max",
+                    "allow_employer_notify",
+                    "resume_complete",
+                    "rating_count",
+                    "private_mode",
+                )
+            ):
+                continue
+            updates[field] = src_val
+
+        if updates:
+            set_clause = ", ".join(f"{k}=?" for k in updates)
+            conn.execute(
+                f"UPDATE users SET {set_clause} WHERE chat_id=?",
+                list(updates.values()) + [target_cid],
+            )
+            log.info(
+                f"  🔄 Pushed {len(updates)} fields {from_cid}→{target_cid}: {list(updates.keys())}"
+            )
+
+
+async def link_users_by_phone(cid: int, phone: str, platform: str = "bale"):
+    """Link new registration to existing user with same phone on another platform."""
+    return await _run_db(_link_users_by_phone_sync, cid, phone, platform)
+
+
 def _get_user_by_phone_sync(phone: str, role: Optional[str] = None):
     if not phone:
         return None
@@ -615,14 +895,48 @@ def _upsert_user_sync(cid: int, **fields):
         else:
             valid["chat_id"] = cid
             valid.setdefault("reg_date", shamsi_now())
-            conn.execute(
-                f"INSERT INTO users ({', '.join(valid.keys())}) VALUES ({', '.join('?' * len(valid))})",
-                list(valid.values()),
-            )
+            # Strip phone fields that would violate UNIQUE constraint (cross-platform linking)
+            # The phone is stored on the primary account; linked accounts use linked_chat_id
+            phone_for_link = None
+            try:
+                conn.execute(
+                    f"INSERT INTO users ({', '.join(valid.keys())}) VALUES ({', '.join('?' * len(valid))})",
+                    list(valid.values()),
+                )
+            except sqlite3.IntegrityError as e:
+                msg = str(e).lower()
+                if "unique" in msg and ("emp_phone" in msg or "js_phone" in msg):
+                    # Phone already exists on another platform — strip phone fields and retry
+                    phone_for_link = valid.pop("emp_phone", None) or valid.pop(
+                        "js_phone", None
+                    )
+                    valid.pop("emp_phone", None)
+                    valid.pop("js_phone", None)
+                    conn.execute(
+                        f"INSERT INTO users ({', '.join(valid.keys())}) VALUES ({', '.join('?' * len(valid))})",
+                        list(valid.values()),
+                    )
+                else:
+                    raise
         conn.commit()
+        # Auto-sync profile changes to linked accounts (Bale ↔ Telegram)
+        try:
+            conn.execute("BEGIN TRANSACTION")
+            _sync_profile_to_linked(conn, cid)
+            conn.commit()
+        except Exception as e:
+            log.warning(f"Profile sync after upsert_user({cid}): {e}")
+            try:
+                conn.rollback()
+            except:
+                pass
         return True
-    except:
-        conn.rollback()
+    except Exception as e:
+        log.error(f"upsert_user({cid}): {e}", exc_info=True)
+        try:
+            conn.rollback()
+        except:
+            pass
         return False
     finally:
         conn.close()
@@ -719,9 +1033,11 @@ async def add_work_experience(
 def _get_work_experiences_sync(user_chat_id: int):
     conn = _c()
     try:
+        cids = _resolve_linked_cids_sync(conn, user_chat_id)
+        phs = ",".join("?" * len(cids))
         rows = conn.execute(
-            "SELECT place, duration, role FROM work_experiences WHERE user_chat_id=? AND deleted_at IS NULL ORDER BY created_at DESC",
-            (user_chat_id,),
+            f"SELECT place, duration, role FROM work_experiences WHERE user_chat_id IN ({phs}) AND deleted_at IS NULL ORDER BY created_at DESC",
+            cids,
         ).fetchall()
         return [dict(row) for row in rows]
     finally:
@@ -753,8 +1069,12 @@ def _create_job_sync(emp_cid: int, **fields):
         jid = cursor.lastrowid
         conn.commit()
         return jid
-    except:
-        conn.rollback()
+    except Exception as e:
+        log.error(f"create_job({emp_cid}): {e}", exc_info=True)
+        try:
+            conn.rollback()
+        except:
+            pass
         return None
     finally:
         conn.close()
@@ -782,13 +1102,15 @@ async def get_job(jid: int):
 def _get_employer_jobs_sync(emp_cid: int, page: int = 0, per: int = 10):
     conn = _c()
     try:
+        cids = _resolve_linked_cids_sync(conn, emp_cid)
+        phs = ",".join("?" * len(cids))
         total = conn.execute(
-            "SELECT COUNT(*) FROM jobs WHERE emp_cid=? AND deleted_at IS NULL",
-            (emp_cid,),
+            f"SELECT COUNT(*) FROM jobs WHERE emp_cid IN ({phs}) AND deleted_at IS NULL",
+            cids,
         ).fetchone()[0]
         rows = conn.execute(
-            "SELECT * FROM jobs WHERE emp_cid=? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ? OFFSET ?",
-            (emp_cid, per, page * per),
+            f"SELECT * FROM jobs WHERE emp_cid IN ({phs}) AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            cids + [per, page * per],
         ).fetchall()
         return to_dict_list(rows), total
     finally:
@@ -957,6 +1279,62 @@ async def delete_job(job_id: int, emp_cid: int) -> bool:
     return await _run_db(_delete_job_sync, job_id, emp_cid)
 
 
+def _close_job_sync(job_id: int, emp_cid: int):
+    conn = _c()
+    try:
+        conn.execute("BEGIN TRANSACTION")
+        existing = conn.execute(
+            "SELECT 1 FROM jobs WHERE job_id=? AND emp_cid=? AND deleted_at IS NULL",
+            (job_id, emp_cid),
+        ).fetchone()
+        if not existing:
+            conn.rollback()
+            return False
+        conn.execute(
+            "UPDATE jobs SET status='closed' WHERE job_id=? AND emp_cid=? AND deleted_at IS NULL",
+            (job_id, emp_cid),
+        )
+        conn.commit()
+        return True
+    except:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+async def close_job(job_id: int, emp_cid: int) -> bool:
+    return await _run_db(_close_job_sync, job_id, emp_cid)
+
+
+def _renew_job_sync(job_id: int, emp_cid: int):
+    conn = _c()
+    try:
+        conn.execute("BEGIN TRANSACTION")
+        existing = conn.execute(
+            "SELECT 1 FROM jobs WHERE job_id=? AND emp_cid=? AND deleted_at IS NULL",
+            (job_id, emp_cid),
+        ).fetchone()
+        if not existing:
+            conn.rollback()
+            return False
+        conn.execute(
+            "UPDATE jobs SET status='pending', admin_approved=0, post_date=? WHERE job_id=? AND emp_cid=? AND deleted_at IS NULL",
+            (shamsi_now(), job_id, emp_cid),
+        )
+        conn.commit()
+        return True
+    except:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+async def renew_job(job_id: int, emp_cid: int) -> bool:
+    return await _run_db(_renew_job_sync, job_id, emp_cid)
+
+
 def _expire_old_jobs_sync():
     conn = _c()
     try:
@@ -1002,6 +1380,7 @@ async def increment_views(jid: int) -> bool:
 def _search_jobs_sync(
     category: Optional[str] = None,
     province: Optional[str] = None,
+    keyword: Optional[str] = None,
     page: int = 0,
     per: int = 10,
 ):
@@ -1016,6 +1395,10 @@ def _search_jobs_sync(
         if province and province not in ("همه", ""):
             sql += " AND province=?"
             params.append(province)
+        if keyword and keyword.strip():
+            sql += " AND (title LIKE ? OR description LIKE ?)"
+            kw = f"%{keyword.strip()}%"
+            params += [kw, kw]
         total = conn.execute(
             sql.replace("SELECT *", "SELECT COUNT(*)"), params
         ).fetchone()[0]
@@ -1030,10 +1413,11 @@ def _search_jobs_sync(
 async def search_jobs(
     category: Optional[str] = None,
     province: Optional[str] = None,
+    keyword: Optional[str] = None,
     page: int = 0,
     per: int = 10,
 ):
-    return await _run_db(_search_jobs_sync, category, province, page, per)
+    return await _run_db(_search_jobs_sync, category, province, keyword, page, per)
 
 
 def _search_seekers_sync(
@@ -1246,10 +1630,12 @@ async def get_job_applications(job_id: int):
 def _get_seeker_applications_sync(seeker_cid: int):
     conn = _c()
     try:
+        cids = _resolve_linked_cids_sync(conn, seeker_cid)
+        phs = ",".join("?" * len(cids))
         rows = conn.execute(
-            "SELECT a.*, j.title, j.category, j.province FROM applications a JOIN jobs j ON a.job_id=j.job_id "
-            "WHERE a.seeker_cid=? AND a.deleted_at IS NULL AND j.deleted_at IS NULL ORDER BY a.created_at DESC LIMIT 50",
-            (seeker_cid,),
+            f"SELECT a.*, j.title, j.category, j.province FROM applications a JOIN jobs j ON a.job_id=j.job_id "
+            f"WHERE a.seeker_cid IN ({phs}) AND a.deleted_at IS NULL AND j.deleted_at IS NULL ORDER BY a.created_at DESC LIMIT 50",
+            cids,
         ).fetchall()
         return to_dict_list(rows)
     finally:
@@ -1576,7 +1962,7 @@ def _get_matching_seekers_for_job_sync(
 ):
     conn = _c()
     try:
-        sql = """SELECT chat_id FROM users WHERE role='job_seeker' AND is_banned=0
+        sql = """SELECT chat_id, platform FROM users WHERE role='job_seeker' AND is_banned=0
                  AND private_mode=0 AND allow_employer_notify=1 AND deleted_at IS NULL
                  AND js_categories LIKE ? AND (js_province = ? OR js_cities LIKE ?"""
         params = [f'%"{category}"%', province, f'%"{province}"%']
@@ -1599,22 +1985,25 @@ async def get_matching_seekers_for_job(
 def _get_matching_employers_for_seeker_sync(
     categories: List[str], province: str, cities: List[str]
 ):
-    """Get employer chat_ids with active jobs matching any of the seeker's categories + location.
+    """Get employer chat_ids + platform with active jobs matching any of the seeker's categories + location.
     Uses a single IN query instead of N separate queries."""
     if not categories:
         return []
     conn = _c()
     try:
         placeholders = ",".join(["?"] * len(categories))
-        sql = f"""SELECT DISTINCT emp_cid FROM jobs WHERE status='active' AND admin_approved=1
-                 AND deleted_at IS NULL AND category IN ({placeholders}) AND (province = ?"""
+        sql = f"""SELECT DISTINCT j.emp_cid, u.platform FROM jobs j
+                 JOIN users u ON j.emp_cid = u.chat_id
+                 WHERE j.status='active' AND j.admin_approved=1
+                 AND j.deleted_at IS NULL AND u.deleted_at IS NULL
+                 AND j.category IN ({placeholders}) AND (j.province = ?"""
         params = list(categories) + [province]
         if cities:
-            sql += " OR province IN (" + ",".join(["?"] * len(cities)) + ")"
+            sql += " OR j.province IN (" + ",".join(["?"] * len(cities)) + ")"
             params += cities
         sql += ")"
         rows = conn.execute(sql, params).fetchall()
-        return [r["emp_cid"] for r in rows]
+        return to_dict_list(rows)
     finally:
         conn.close()
 
