@@ -4027,21 +4027,22 @@ async def main():
 
     # ── Polling loop for one provider ──
     async def _poll_provider(name: str, token: str, base_url: str):
+        full_url = f"{base_url}{token}"
         api.set_token(token, base_url)
         offset = 0
 
-        # Skip pending updates
-        try:
-            async with aiohttp.ClientSession() as tmp:
-                r = await api.get_updates(tmp, timeout=1, limit=1)
+        async with aiohttp.ClientSession() as s:
+            # Register this provider's session for cross-platform routing IMMEDIATELY
+            # so all subsequent API calls use the correct per-session URL
+            api.register_provider(name.lower(), s, full_url)
+
+            # Skip pending updates (use registered session)
+            try:
+                r = await api.get_updates(s, timeout=1, limit=1)
                 if r.get("ok") and r.get("result"):
                     offset = r["result"][-1]["update_id"] + 1
-        except:
-            pass
-
-        async with aiohttp.ClientSession() as s:
-            # Register this provider's session for cross-platform routing
-            api.register_provider(name.lower(), s, f"{base_url}{token}")
+            except:
+                pass
 
             # Verify connection
             me = await api.get_me(s)
@@ -4056,8 +4057,6 @@ async def main():
 
             while True:
                 try:
-                    # Ensure this provider's base URL is active
-                    api.set_token(token, base_url)
                     resp = await api.get_updates(s, offset=offset)
                     if not resp.get("ok"):
                         log.warning(f"[{name}] get_updates failed, retry in 3s...")

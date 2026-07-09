@@ -19,18 +19,23 @@ _PLATFORM = "bale"  # current active platform name
 # ── Multi-provider session registry ──
 _provider_sessions: Dict[str, aiohttp.ClientSession] = {}
 _provider_bases: Dict[str, str] = {}
+# Session id → full base URL (with token) for per-provider routing
+_session_urls: Dict[int, str] = {}
 
 
 def register_provider(platform: str, session: aiohttp.ClientSession, base_url: str):
     """Register a provider's session for cross-platform message routing."""
     _provider_sessions[platform] = session
     _provider_bases[platform] = base_url
+    _session_urls[id(session)] = base_url  # per-session URL to avoid global race
 
 
 def unregister_provider(platform: str):
     """Remove a provider from the registry."""
-    _provider_sessions.pop(platform, None)
+    session = _provider_sessions.pop(platform, None)
     _provider_bases.pop(platform, None)
+    if session is not None:
+        _session_urls.pop(id(session), None)
 
 
 def get_provider_session(platform: str):
@@ -177,7 +182,9 @@ async def _post(
         )
 
     kw = {k: v for k, v in kw.items() if v is not None}
-    url = f"{_BASE}/{method}"
+    # Use per-session base URL if registered, otherwise fall back to global _BASE
+    base_url = _session_urls.get(id(s), _BASE)
+    url = f"{base_url}/{method}"
     last_err = None
 
     for attempt in range(retries + 1):
