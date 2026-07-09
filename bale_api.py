@@ -111,7 +111,7 @@ async def send_to_user(
     cid: int,
     text: str,
     reply_markup=None,
-    user_platform: str = None,
+    user_platform: Optional[str] = None,
     default_session=None,
 ):
     """Send message to a user, routing to the correct provider based on their platform.
@@ -141,6 +141,26 @@ async def send_to_user(
     if session is None:
         return {"ok": False, "description": "No provider session available"}
 
+    # Validate session is still usable (not closed)
+    if getattr(session, "closed", False):
+        log.warning(
+            f"send_to_user: session for platform={user_platform} is closed, unregistering"
+        )
+        if user_platform:
+            unregister_provider(user_platform)
+        # Fall back to current provider
+        if default_session and not getattr(default_session, "closed", False):
+            session = default_session
+        else:
+            # Try any other available session
+            for plat, s in list(_provider_sessions.items()):
+                if not getattr(s, "closed", False):
+                    session = s
+                    user_platform = plat
+                    break
+            else:
+                return {"ok": False, "description": "All provider sessions are closed"}
+
     # Temporarily switch BASE to the target platform
     global _BASE
     saved_base = _BASE
@@ -148,6 +168,9 @@ async def send_to_user(
         if user_platform and user_platform in _provider_bases:
             _BASE = _provider_bases[user_platform]
         return await send_message(session, cid, text, reply_markup)
+    except Exception as e:
+        log.error(f"send_to_user failed for cid={cid} platform={user_platform}: {e}")
+        return {"ok": False, "description": str(e)}
     finally:
         _BASE = saved_base
 

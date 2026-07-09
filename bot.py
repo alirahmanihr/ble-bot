@@ -993,7 +993,19 @@ async def notify_admins(s, text, kb=None):
     for aid in ADMIN_IDS:
         admin_user = await db.get_user(aid)
         platform = admin_user.get("platform", "bale") if admin_user else "bale"
-        await api.send_to_user(aid, text, kb, user_platform=platform, default_session=s)
+        try:
+            result = await api.send_to_user(
+                aid, text, kb, user_platform=platform, default_session=s
+            )
+            if not result.get("ok"):
+                log.warning(
+                    f"notify_admins: failed to notify admin {aid} on {platform}: {result.get('description')}"
+                )
+                # Fallback: try sending via default session (current provider)
+                if platform != api.get_platform():
+                    await api.send_message(s, aid, text, reply_markup=kb)
+        except Exception as e:
+            log.error(f"notify_admins: error notifying admin {aid} on {platform}: {e}")
 
 
 # ==================== DISPATCH ====================
@@ -4045,14 +4057,22 @@ async def main():
                 pass
 
             # Verify connection
-            me = await api.get_me(s)
+            try:
+                me = await api.get_me(s)
+            except Exception as e:
+                log.error(f"[{name}] ❌ اتصال ناموفق: {e}")
+                print(f"[{name}] Connection failed: {e}")
+                api.unregister_provider(name.lower())
+                return
+
             if me.get("ok"):
                 uname = me["result"].get("username", "unknown")
                 log.info(f"[{name}] ✅ متصل: @{uname}")
                 print(f"[{name}] Hamrakar Bot connected as @{uname}")
             else:
-                log.error(f"[{name}] ❌ اتصال ناموفق! توکن را بررسی کنید.")
-                print(f"[{name}] Connection failed — check token")
+                log.error(f"[{name}] ❌ اتصال ناموفق! توکن را بررسی کنید: {me}")
+                print(f"[{name}] Connection failed — check token: {me}")
+                api.unregister_provider(name.lower())
                 return
 
             while True:
