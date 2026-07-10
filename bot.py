@@ -989,7 +989,9 @@ async def show_menu(s, cid, user, msg=""):
 
 
 async def notify_admins(s, text, kb=None):
-    """Notify all admins on their respective platforms (cross-platform routing)."""
+    """Notify all admins on their respective platforms (cross-platform routing).
+    If admin hasn't registered on their platform yet, send via current provider.
+    Admin IDs are the same person on both platforms — linked by being in ADMIN_IDS."""
     for aid in ADMIN_IDS:
         admin_user = await db.get_user(aid)
         platform = admin_user.get("platform", "bale") if admin_user else "bale"
@@ -999,13 +1001,19 @@ async def notify_admins(s, text, kb=None):
             )
             if not result.get("ok"):
                 log.warning(
-                    f"notify_admins: failed to notify admin {aid} on {platform}: {result.get('description')}"
+                    f"notify_admins: failed for admin {aid} on {platform}: {result.get('description')}"
                 )
-                # Fallback: try sending via default session (current provider)
-                if platform != api.get_platform():
-                    await api.send_message(s, aid, text, reply_markup=kb)
+                # Fallback: send via current provider's session
+                fallback = await api.send_message(s, aid, text, reply_markup=kb)
+                if not fallback.get("ok"):
+                    log.error(f"notify_admins: fallback also failed for admin {aid}")
         except Exception as e:
             log.error(f"notify_admins: error notifying admin {aid} on {platform}: {e}")
+            # Last resort: try current session
+            try:
+                await api.send_message(s, aid, text, reply_markup=kb)
+            except Exception:
+                pass
 
 
 # ==================== DISPATCH ====================
@@ -1097,6 +1105,9 @@ async def handle_cmd(s, cid, text, data):
         return
     if cmd == "/menu":
         await cmd_menu(s, cid)
+        return
+    if cmd == "/admin":
+        await cmd_admin(s, cid)
         return
     if cmd == "/profile":
         await cmd_profile(s, cid)
@@ -2977,6 +2988,21 @@ async def do_welcome(s, cid):
 
 
 async def cmd_start(s, cid):
+    # Admins bypass registration — auto-create user record and show admin panel
+    if cid in ADMIN_IDS:
+        user = await db.get_user(cid)
+        if not user or not user.get("role"):
+            # Auto-register admin with platform info
+            await db.upsert_user(
+                cid,
+                role="admin",
+                platform=api.get_platform(),
+                emp_name="ادمین",
+                reg_date=shamsi_now(),
+            )
+        await show_menu(s, cid, await db.get_user(cid), "🔐 پنل مدیریت")
+        return
+
     user = await db.get_user(cid)
     if user and user["role"]:
         await show_menu(s, cid, user)
@@ -2993,11 +3019,45 @@ async def cmd_start(s, cid):
 
 
 async def cmd_menu(s, cid):
+    # Admins always get admin panel
+    if cid in ADMIN_IDS:
+        admin_user = await db.get_user(cid)
+        if not admin_user or not admin_user.get("role"):
+            await db.upsert_user(
+                cid,
+                role="admin",
+                platform=api.get_platform(),
+                emp_name="ادمین",
+                reg_date=shamsi_now(),
+            )
+            admin_user = await db.get_user(cid)
+        await show_menu(s, cid, admin_user)
+        return
+
     user = await db.get_user(cid)
     if user and user["role"]:
         await show_menu(s, cid, user)
     else:
         await do_welcome(s, cid)
+
+
+async def cmd_admin(s, cid):
+    """Force admin panel — works even if admin ID has changed or user record is corrupted."""
+    if cid not in ADMIN_IDS:
+        await api.send_message(s, cid, "⛔ شما ادمین نیستید.")
+        return
+    admin_user = await db.get_user(cid)
+    if not admin_user or not admin_user.get("role"):
+        await db.upsert_user(
+            cid,
+            role="admin",
+            platform=api.get_platform(),
+            emp_name="ادمین",
+            reg_date=shamsi_now(),
+        )
+        admin_user = await db.get_user(cid)
+    plat = api.get_platform().upper()
+    await show_menu(s, cid, admin_user, f"🔐 پنل مدیریت ({plat})")
 
 
 async def cmd_profile(s, cid):
