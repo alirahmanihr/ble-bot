@@ -955,10 +955,12 @@ def js_menu():
     )
 
 
-def adm_menu():
+def adm_menu(pending_jobs=0, pending_apps=0):
+    job_btn = f"📋 تأیید آگهی ({pending_jobs})" if pending_jobs else "📋 تأیید آگهی"
+    app_btn = f"📬 تأیید رزومه ({pending_apps})" if pending_apps else "📬 تأیید رزومه"
     return reply_kb(
         [
-            ["📋 تأیید آگهی", "📬 تأیید رزومه"],
+            [job_btn, app_btn],
             ["📊 آمار کامل", "📢 پیام همگانی"],
             ["🚫 مدیریت کاربران", "📑 لاگ ادمین"],
             ["🔙 منو"],
@@ -979,11 +981,29 @@ async def show_menu(s, cid, user, msg=""):
         await do_welcome(s, cid)
         return
     role_map = {"employer": "کارفرما", "job_seeker": "کارجو"}
-    r = "ادمین" if cid in ADMIN_IDS else role_map.get(user["role"], "—")
+    is_admin = cid in ADMIN_IDS
+
+    if is_admin:
+        # Fetch pending counts for admin menu badges
+        try:
+            pj = await db.get_pending_jobs()
+            pa = await db.get_pending_applications()
+            pending_jobs = len(pj) if pj else 0
+            pending_apps = len(pa) if pa else 0
+        except Exception:
+            pending_jobs = pending_apps = 0
+
+        plat = api.get_platform().upper()
+        r = f"ادمین ({plat})"
+        kb = adm_menu(pending_jobs, pending_apps)
+    else:
+        r = role_map.get(user["role"], "—")
+        kb = menu_for(user)
+
     t = f"🏠 *{BOT_NAME}*\n👤 {r}"
     if msg:
         t += f"\n\n{msg}"
-    sent = await _send_safe(s, cid, t, menu_for(user))
+    sent = await _send_safe(s, cid, t, kb)
     if not sent:
         await _send_safe(s, cid, t, remove_kb())
 
