@@ -1084,6 +1084,60 @@ async def create_job(emp_cid: int, **fields):
     return await _run_db(_create_job_sync, emp_cid, **fields)
 
 
+# ── Channel Job Import (already-published ads, instant active) ──
+CHANNEL_EMP_CID = 1  # system user representing the channel (created on DB init)
+
+
+def _create_channel_job_sync(**fields):
+    """Create a job that's immediately active (no admin approval needed).
+    These come from existing channel posts. 30-day expiry."""
+    conn = _c()
+    try:
+        # Ensure channel employer user exists (idempotent)
+        existing = conn.execute(
+            "SELECT chat_id FROM users WHERE chat_id=? AND deleted_at IS NULL",
+            (CHANNEL_EMP_CID,),
+        ).fetchone()
+        if not existing:
+            conn.execute(
+                "INSERT INTO users (chat_id, role, emp_name, platform, reg_date) VALUES (?,?,?,?,?)",
+                (CHANNEL_EMP_CID, "employer", "کانال هم‌راه‌کار", "system", shamsi_now()),
+            )
+            conn.commit()
+
+        fields.update(
+            emp_cid=CHANNEL_EMP_CID,
+            post_date=shamsi_now(),
+            status="active",
+            admin_approved=1,
+            approved_date=shamsi_now(),
+            expiry_date=shamsi_future(30),
+        )
+        conn.execute("BEGIN TRANSACTION")
+        cols = [c[1] for c in conn.execute("PRAGMA table_info(jobs)").fetchall()]
+        valid = {k: v for k, v in fields.items() if k in cols}
+        cursor = conn.execute(
+            f"INSERT INTO jobs ({', '.join(valid.keys())}) VALUES ({', '.join('?' * len(valid))})",
+            list(valid.values()),
+        )
+        jid = cursor.lastrowid
+        conn.commit()
+        return jid
+    except Exception as e:
+        log.error(f"create_channel_job: {e}", exc_info=True)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return None
+    finally:
+        conn.close()
+
+
+async def create_channel_job(**fields):
+    return await _run_db(_create_channel_job_sync, **fields)
+
+
 def _get_job_sync(jid: int):
     conn = _c()
     try:
