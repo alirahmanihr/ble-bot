@@ -895,8 +895,8 @@ def _upsert_user_sync(cid: int, **fields):
         else:
             valid["chat_id"] = cid
             valid.setdefault("reg_date", shamsi_now())
-            # Strip phone fields that would violate UNIQUE constraint (cross-platform linking)
-            # The phone is stored on the primary account; linked accounts use linked_chat_id
+            # Preserve platform for potential cross-platform linking
+            platform_for_link = valid.get("platform", "bale")
             phone_for_link = None
             try:
                 conn.execute(
@@ -916,13 +916,13 @@ def _upsert_user_sync(cid: int, **fields):
                         f"INSERT INTO users ({', '.join(valid.keys())}) VALUES ({', '.join('?' * len(valid))})",
                         list(valid.values()),
                     )
-                    # Immediately link the new account to the existing one via phone
-                    platform = valid.get("platform", "bale")
-                    if phone_for_link:
-                        _link_users_by_phone_sync(cid, phone_for_link, platform)
                 else:
                     raise
         conn.commit()
+        # Cross-platform linking: must happen AFTER commit so the newly inserted
+        # record is visible to the separate connection used by _link_users_by_phone_sync.
+        if phone_for_link:
+            _link_users_by_phone_sync(cid, phone_for_link, platform_for_link)
         # Auto-sync profile changes to linked accounts (Bale ↔ Telegram)
         try:
             conn.execute("BEGIN TRANSACTION")
