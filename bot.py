@@ -1346,6 +1346,34 @@ async def handle_state(s, cid, state, data, text, doc, photos):
             inline([[("✅ تکمیل پروفایل", "js_profile_done")]]),
         )
 
+    # -------------------- مهارت‌ها (ورودی متنی سفارشی) --------------------
+    elif state == JS_SKILLS:
+        new_skill = text.strip()
+        sel = data.get("js_skills", [])
+        if not new_skill:
+            await api.send_message(
+                s, cid, "⚠️ لطفاً یک مهارت وارد کنید یا از دکمه‌های زیر انتخاب نمایید."
+            )
+            return
+        if new_skill in sel:
+            await api.send_message(s, cid, "⚠️ این مهارت قبلاً انتخاب شده است.")
+            return
+        if len(sel) >= 10:
+            await api.send_message(s, cid, "⚠️ حداکثر ۱۰ مهارت می‌توانید انتخاب کنید.")
+            return
+        sel.append(new_skill)
+        if new_skill not in SKILLS_LIST:
+            SKILLS_LIST.append(new_skill)
+        data["js_skills"] = sel
+        await db.set_state(cid, JS_SKILLS, data)
+        await api.send_message(
+            s,
+            cid,
+            f"✅ *{new_skill}* به مهارت‌های شما اضافه شد.\n"
+            f"می‌توانید مهارت دیگری وارد کنید یا دکمه 'تأیید' را بزنید.",
+            paginate(SKILLS_LIST, sel, "skill", data.get("_sk", 0)),
+        )
+
     # -------------------- آگهی --------------------
     elif state == JOB_TITLE:
         if len(text) < 2:
@@ -3024,6 +3052,38 @@ async def cmd_start(s, cid):
         return
 
     user = await db.get_user(cid)
+    # Cross-platform detection: if this chat_id is new but linked from another platform,
+    # auto-merge the profile so user sees their data immediately instead of re-registering.
+    if not user or not user.get("role"):
+        linked_from = await db._run_db(
+            lambda conn: conn.execute(
+                "SELECT chat_id FROM users WHERE linked_chat_id=? AND deleted_at IS NULL",
+                (cid,),
+            ).fetchone()
+        )
+        if linked_from:
+            other_cid = linked_from[0]
+            other_user = await db.get_user(other_cid)
+            if other_user and other_user.get("role"):
+                platform = api.get_platform()
+                phone = other_user.get("emp_phone") or other_user.get("js_phone") or ""
+                await db.upsert_user(
+                    cid,
+                    role=other_user["role"],
+                    platform=platform,
+                    reg_date=shamsi_now(),
+                )
+                await db.link_users_by_phone(cid, phone, platform)
+                user = await db.get_user(cid)
+                if user and user.get("role"):
+                    await show_menu(
+                        s,
+                        cid,
+                        user,
+                        f"🔗 پروفایل شما از {other_user.get('platform', 'دیگر')} بازیابی شد",
+                    )
+                    return
+
     if user and user["role"]:
         await show_menu(s, cid, user)
     else:

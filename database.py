@@ -916,6 +916,10 @@ def _upsert_user_sync(cid: int, **fields):
                         f"INSERT INTO users ({', '.join(valid.keys())}) VALUES ({', '.join('?' * len(valid))})",
                         list(valid.values()),
                     )
+                    # Immediately link the new account to the existing one via phone
+                    platform = valid.get("platform", "bale")
+                    if phone_for_link:
+                        _link_users_by_phone_sync(cid, phone_for_link, platform)
                 else:
                     raise
         conn.commit()
