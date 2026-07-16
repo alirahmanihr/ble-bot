@@ -3420,7 +3420,7 @@ async def finalize_application(s, cid, data):
 
     if not aid:
         user = await db.get_user(cid)
-        if err == "duplicate":
+        if err == "duplicate" or err == "already_exists":
             await _send_safe(s, cid, "⚠️ قبلاً برای این آگهی رزومه ارسال کرده‌اید")
         elif err == "rate_limit":
             await _send_safe(

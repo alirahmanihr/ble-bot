@@ -428,6 +428,7 @@ def _repair_schema(conn: sqlite3.Connection):
     try:
         cols = [c[1] for c in conn.execute("PRAGMA table_info(users)").fetchall()]
         needed = {
+            # v4/v3 additions
             "allow_employer_notify": "INTEGER DEFAULT 0",
             "resume_complete": "INTEGER DEFAULT 0",
             "js_about": "TEXT",
@@ -437,6 +438,29 @@ def _repair_schema(conn: sqlite3.Connection):
             "work_experience": "TEXT DEFAULT '[]'",
             "linked_chat_id": "INTEGER DEFAULT NULL",
             "platform": "TEXT DEFAULT 'bale'",
+            # v1 columns that may be missing from old partial inits
+            "emp_company": "TEXT",
+            "emp_industry": "TEXT",
+            "emp_position": "TEXT",
+            "emp_address": "TEXT",
+            "emp_email": "TEXT",
+            "emp_website": "TEXT",
+            "emp_gender_need": "TEXT",
+            "emp_age_min": "INTEGER",
+            "emp_age_max": "INTEGER",
+            "js_job_title": "TEXT",
+            "js_experience": "TEXT",
+            "js_education": "TEXT",
+            "js_salary_min": "INTEGER DEFAULT 0",
+            "js_salary_max": "INTEGER DEFAULT 0",
+            "js_dob": "TEXT",
+            "js_gender": "TEXT",
+            "js_relocate": "TEXT",
+            "rating": "REAL DEFAULT 0.0",
+            "rating_count": "INTEGER DEFAULT 0",
+            "private_mode": "INTEGER DEFAULT 0",
+            "ban_reason": "TEXT",
+            "created_at": "TIMESTAMP",
         }
         for col_name, col_def in needed.items():
             if col_name not in cols:
@@ -882,6 +906,9 @@ def _upsert_user_sync(cid: int, **fields):
         conn.execute("BEGIN TRANSACTION")
         cols = [c[1] for c in conn.execute("PRAGMA table_info(users)").fetchall()]
         valid = {k: v for k, v in fields.items() if k in cols}
+        # Always define link vars to avoid UnboundLocalError on UPDATE path
+        phone_for_link = None
+        platform_for_link = fields.get("platform", "bale")
         existing = conn.execute(
             "SELECT 1 FROM users WHERE chat_id=? AND deleted_at IS NULL", (cid,)
         ).fetchone()
@@ -923,6 +950,12 @@ def _upsert_user_sync(cid: int, **fields):
         # record is visible to the separate connection used by _link_users_by_phone_sync.
         if phone_for_link:
             _link_users_by_phone_sync(cid, phone_for_link, platform_for_link)
+        else:
+            # Even if no UNIQUE conflict (different phone columns for employer vs seeker),
+            # check if the user's phone matches an existing user on the other phone column.
+            phone = fields.get("emp_phone") or fields.get("js_phone")
+            if phone:
+                _link_users_by_phone_sync(cid, phone, platform_for_link)
         # Auto-sync profile changes to linked accounts (Bale ↔ Telegram)
         try:
             conn.execute("BEGIN TRANSACTION")
@@ -1587,9 +1620,13 @@ def _create_application_sync(
         )
         conn.commit()
         return aid, None
-    except:
+    except Exception as e:
+        log.error(
+            f"_create_application_sync(job={job_id}, seeker={seeker_cid}): {e}",
+            exc_info=True,
+        )
         conn.rollback()
-        return None, "duplicate"
+        return None, str(e)[:100]
     finally:
         conn.close()
 
@@ -1961,7 +1998,8 @@ def _add_notification_sync(user_cid: int, text: str, message_id: Optional[str] =
         )
         conn.commit()
         return True
-    except:
+    except Exception as e:
+        log.error(f"_add_notification_sync(user={user_cid}): {e}", exc_info=True)
         conn.rollback()
         return False
     finally:
@@ -2003,7 +2041,8 @@ def _get_notifications_sync(user_cid: int):
         )
         conn.commit()
         return to_dict_list(rows)
-    except:
+    except Exception as e:
+        log.error(f"_get_notifications_sync(user={user_cid}): {e}", exc_info=True)
         conn.rollback()
         return []
     finally:
